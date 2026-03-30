@@ -1,0 +1,285 @@
+:root {
+  --bg: #f4efe5;
+  --panel: rgba(255, 252, 247, 0.94);
+  --panel-strong: #fffdf9;
+  --ink: #171411;
+  --muted: #6f665c;
+  --line: rgba(23, 20, 17, 0.12);
+  --accent: #0c6c5b;
+  --accent-soft: rgba(12, 108, 91, 0.12);
+  --danger: #a93d35;
+  --warning: #b57410;
+  --shadow: 0 18px 48px rgba(30, 23, 15, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(12, 108, 91, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(181, 116, 16, 0.16), transparent 24%),
+    linear-gradient(180deg, #f7f2e9 0%, var(--bg) 100%);
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid var(--line);
+  padding: 28px 22px;
+  background: rgba(250, 246, 238, 0.72);
+  backdrop-filter: blur(12px);
+}
+
+.brand {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 28px;
+}
+
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #0c6c5b, #0f3e4e);
+  color: white;
+  font-size: 20px;
+}
+
+.brand h1,
+.page-head h2 {
+  margin: 0;
+  font-weight: 600;
+}
+
+.brand p,
+.page-head p,
+.metric-label,
+.card-subtle,
+.field-label,
+.empty {
+  color: var(--muted);
+}
+
+.nav {
+  display: grid;
+  gap: 8px;
+}
+
+.nav-link {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+}
+
+.nav-link.active {
+  background: var(--panel);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+
+.content {
+  padding: 28px;
+  display: grid;
+  gap: 22px;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.page-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.panel,
+.metric,
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+}
+
+.panel,
+.card {
+  padding: 18px;
+}
+
+.metric {
+  padding: 16px 18px;
+}
+
+.metric-value {
+  font-size: 32px;
+  font-weight: 600;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.queue-list,
+.draft-list,
+.log-list {
+  display: grid;
+  gap: 12px;
+}
+
+.queue-item,
+.draft-item,
+.log-item {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  background: var(--panel-strong);
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.space {
+  justify-content: space-between;
+}
+
+.pill {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.pill.warn {
+  color: var(--warning);
+  background: rgba(181, 116, 16, 0.12);
+}
+
+.pill.danger {
+  color: var(--danger);
+  background: rgba(169, 61, 53, 0.12);
+}
+
+.headline {
+  margin: 10px 0 8px;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.mono {
+  font-family: "Courier New", monospace;
+  font-size: 13px;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.editor {
+  width: 100%;
+  min-height: 120px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+  resize: vertical;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.button {
+  border: 0;
+  border-radius: 14px;
+  padding: 11px 16px;
+  cursor: pointer;
+  background: var(--ink);
+  color: white;
+}
+
+.button.secondary {
+  background: white;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.button.danger {
+  background: var(--danger);
+}
+
+.stack {
+  display: grid;
+  gap: 10px;
+}
+
+@media (max-width: 1000px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .metrics,
+  .card-grid,
+  .meta-grid {
+    grid-template-columns: 1fr;
+  }
+}

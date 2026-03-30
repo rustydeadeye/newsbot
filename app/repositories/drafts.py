@@ -1,0 +1,38 @@
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.event import DraftPost, Event
+
+
+class DraftRepository:
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def add(self, draft: DraftPost) -> DraftPost:
+        self.db.add(draft)
+        self.db.flush()
+        return draft
+
+    def list_publishable(self) -> list[DraftPost]:
+        stmt = select(DraftPost).where(DraftPost.status == "approved", DraftPost.needs_review.is_(False))
+        return list(self.db.scalars(stmt))
+
+    def get_event(self, draft: DraftPost) -> Event | None:
+        stmt = select(Event).where(Event.id == draft.event_id)
+        return self.db.scalar(stmt)
+
+    def get(self, draft_id: int) -> DraftPost | None:
+        return self.db.get(DraftPost, draft_id)
+
+    def list_needing_review(self) -> list[DraftPost]:
+        stmt = select(DraftPost).where(DraftPost.needs_review.is_(True)).order_by(DraftPost.created_at.desc())
+        return list(self.db.scalars(stmt))
+
+    def latest_for_event(self, event_id: int) -> DraftPost | None:
+        stmt = (
+            select(DraftPost)
+            .where(DraftPost.event_id == event_id)
+            .order_by(DraftPost.created_at.desc())
+            .limit(1)
+        )
+        return self.db.scalar(stmt)
