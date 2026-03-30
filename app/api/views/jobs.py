@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.schemas import PublishJobRetryAction
+from app.api.security import require_admin
 from app.db.session import get_db
-from app.models.event import DraftPost
 from app.repositories.drafts import DraftRepository
 from app.repositories.events import EventRepository
 from app.repositories.jobs import PublishJobRepository, PublishLogRepository
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 @router.get("")

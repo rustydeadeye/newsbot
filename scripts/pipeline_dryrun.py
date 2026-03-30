@@ -32,6 +32,7 @@ from app.services.ingestion.adapters import (
     RSSSourceAdapter,
 )
 from app.services.ingestion.base import FetchedItem
+from app.services.normalization.dedupe import make_dedupe_key
 from app.services.normalization.extractors import extract_facts
 from app.services.scoring import SOURCE_PRIORITY, score_event
 
@@ -50,6 +51,7 @@ class PipelineResult:
     source_name: str
     title: str
     event_type: str
+    subject_key: str | None
     ticker: str | None
     importance_score: int
     confidence_score: float
@@ -103,7 +105,7 @@ def fetch_and_process(src: dict, drafting: DraftingService) -> list[PipelineResu
         items = adapter.fetch()
     except Exception as exc:
         return [PipelineResult(
-            source_name=src["name"], title="", event_type="", ticker=None,
+            source_name=src["name"], title="", event_type="", subject_key=None, ticker=None,
             importance_score=0, confidence_score=0, would_auto_post=False,
             review_reason=None, draft_text="", safety_flags={},
             published_at=None, fetch_error=f"{type(exc).__name__}: {exc}",
@@ -123,6 +125,7 @@ def fetch_and_process(src: dict, drafting: DraftingService) -> list[PipelineResu
             source_name=src["name"],
             title=fetched.title or "",
             event_type=facts["event_class"],
+            subject_key=facts.get("subject_key"),
             ticker=facts.get("ticker"),
             importance_score=importance,
             confidence_score=confidence,
@@ -133,7 +136,31 @@ def fetch_and_process(src: dict, drafting: DraftingService) -> list[PipelineResu
             published_at=fetched.published_at,
         ))
 
-    return results
+    return _dedupe_results(results)
+
+
+def _dedupe_results(results: list[PipelineResult]) -> list[PipelineResult]:
+    deduped: dict[str, PipelineResult] = {}
+    for result in results:
+        dedupe_key = make_dedupe_key(
+            event_type=result.event_type,
+            ticker=result.ticker,
+            entity_name=None,
+            occurred_at=result.published_at,
+            key_number=result.subject_key,
+        )
+        current = deduped.get(dedupe_key)
+        if current is None or _prefer_result(result, current):
+            deduped[dedupe_key] = result
+    return list(deduped.values())
+
+
+def _prefer_result(candidate: PipelineResult, existing: PipelineResult) -> bool:
+    candidate_date = candidate.published_at or datetime.min.replace(tzinfo=timezone.utc)
+    existing_date = existing.published_at or datetime.min.replace(tzinfo=timezone.utc)
+    if candidate_date != existing_date:
+        return candidate_date > existing_date
+    return candidate.importance_score > existing.importance_score
 
 
 def print_result(r: PipelineResult, index: int) -> None:

@@ -11,12 +11,14 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
+from app.api.security import ViewerContext, get_current_viewer, require_admin
 from app.models.creator import CreatorSettings
 from app.models.event import DraftPost, Event
+from app.models.source import Source
 from app.models.job import PublishJob, PublishLog
 
 
-def _build_client() -> tuple[TestClient, Session]:
+def _build_client(role: str = "admin") -> tuple[TestClient, Session]:
     engine = create_engine(
         "sqlite://",
         future=True,
@@ -30,7 +32,20 @@ def _build_client() -> tuple[TestClient, Session]:
     def override_get_db():
         yield session
 
+    def override_get_current_viewer():
+        return ViewerContext(user_id="user-1", email=f"{role}@example.com", role=role, display_name=role.title())
+
+    def override_require_admin():
+        viewer = override_get_current_viewer()
+        if viewer.role != "admin":
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=403, detail="Admin access required")
+        return viewer
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_viewer] = override_get_current_viewer
+    app.dependency_overrides[require_admin] = override_require_admin
     return TestClient(app), session
 
 
@@ -112,6 +127,22 @@ def test_creator_settings_read_and_update() -> None:
     assert update_response.json()["watchlist"] == ["TCS", "INFY"]
 
 
+def test_customer_settings_update_cannot_change_admin_fields() -> None:
+    client, db = _build_client(role="customer")
+    db.add(CreatorSettings(display_name="Desk", max_posts_per_hour=6, watchlist=["TCS"], blocked_phrases=["buy now"]))
+    db.commit()
+
+    response = client.put(
+        "/settings/creator",
+        json={"display_name": "Desk 2", "max_posts_per_hour": 12, "watchlist": ["INFY"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["display_name"] == "Desk 2"
+    assert response.json()["watchlist"] == ["INFY"]
+    assert response.json()["max_posts_per_hour"] == 6
+
+
 def test_publish_logs_endpoint_returns_logs() -> None:
     client, db = _build_client()
     event = Event(
@@ -139,3 +170,55 @@ def test_publish_logs_endpoint_returns_logs() -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["platform_post_id"] == "12345"
+
+
+def test_customer_cannot_access_publish_jobs() -> None:
+    client, _db = _build_client(role="customer")
+
+    response = client.get("/publish-jobs")
+
+    assert response.status_code == 403
+
+
+def test_customer_cannot_access_sources() -> None:
+    client, db = _build_client(role="customer")
+    db.add(Source(name="RBI", type="rss", base_url="https://example.com", poll_interval_sec=300, enabled=True))
+    db.commit()
+
+    response = client.get("/sources")
+
+    assert response.status_code == 403
+
+
+def test_customer_events_hide_admin_fields() -> None:
+    client, db = _build_client(role="customer")
+    event = Event(
+        event_type="macro_release",
+        entity_type="market",
+        entity_name="Market",
+        source_priority=100,
+        occurred_at=datetime.now(timezone.utc),
+        summary_facts={"headline": "RBI Update"},
+        importance_score=95,
+        confidence_score=0.95,
+        dedupe_key="macro_release|market|2026-03-28|na",
+        status="drafted",
+    )
+    db.add(event)
+    db.commit()
+
+    response = client.get("/events")
+
+    assert response.status_code == 200
+    payload = response.json()[0]
+    assert "dedupe_key" not in payload
+    assert "status" not in payload
+
+
+def test_auth_me_returns_current_viewer() -> None:
+    client, _db = _build_client(role="customer")
+
+    response = client.get("/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["viewer"]["role"] == "customer"

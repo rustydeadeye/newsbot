@@ -1,3 +1,5 @@
+import { ViewerProfile } from "@/lib/session";
+
 export type EventSummary = {
   id: number;
   event_type: string;
@@ -5,9 +7,9 @@ export type EventSummary = {
   ticker: string | null;
   importance_score: number;
   confidence_score: number;
-  dedupe_key: string;
+  dedupe_key?: string;
   summary_facts: Record<string, unknown>;
-  status: string;
+  status?: string;
 };
 
 export type DraftSummary = {
@@ -48,6 +50,7 @@ export type PublishJob = {
   scheduled_for: string | null;
   attempt_count: number;
   last_error: string | null;
+  result_message?: string | null;
   created_at: string | null;
   updated_at: string | null;
   draft: DraftSummary | null;
@@ -72,4 +75,8 @@ export type CreatorSettings = {
   max_posts_per_hour: number;
   watchlist: string[];
   blocked_phrases: string[];
+};
+
+export type AuthMeResponse = {
+  viewer: ViewerProfile;
 };

@@ -4,17 +4,23 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { approveDraft, rejectDraft } from "@/lib/api";
+import { ViewerRole } from "@/lib/session";
 
 export function ReviewActions({
   draftId,
-  initialText
+  initialText,
+  role,
+  initialStatus,
+  compact = false
 }: {
   draftId: number;
   initialText: string;
+  role: ViewerRole;
+  initialStatus?: string;
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [text, setText] = useState(initialText);
-  const [reviewer, setReviewer] = useState("editor");
   const [reason, setReason] = useState("Needs rewrite");
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -23,7 +29,6 @@ export function ReviewActions({
     startTransition(async () => {
       try {
         const result = await approveDraft(draftId, {
-          reviewer,
           edited_text: text,
           auto_queue: autoQueue
         });
@@ -38,7 +43,7 @@ export function ReviewActions({
   function onReject() {
     startTransition(async () => {
       try {
-        await rejectDraft(draftId, { reviewer, reason });
+        await rejectDraft(draftId, { reason });
         setMessage("Draft rejected.");
         router.refresh();
       } catch (error) {
@@ -48,11 +53,7 @@ export function ReviewActions({
   }
 
   return (
-    <div className="stack">
-      <label>
-        <span className="field-label">Reviewer</span>
-        <input className="editor" value={reviewer} onChange={(event) => setReviewer(event.target.value)} />
-      </label>
+    <div className={compact ? "stack compact-actions" : "stack"}>
       <label>
         <span className="field-label">Draft Text</span>
         <textarea className="editor" value={text} onChange={(event) => setText(event.target.value)} />
@@ -62,16 +63,19 @@ export function ReviewActions({
         <input className="editor" value={reason} onChange={(event) => setReason(event.target.value)} />
       </label>
       <div className="actions">
-        <button className="button" disabled={isPending} onClick={() => onApprove(true)}>
-          Approve + Queue
+        <button className="button" disabled={isPending} onClick={() => onApprove(role === "admin")}>
+          {role === "admin" ? "Approve + Queue" : "Approve"}
         </button>
-        <button className="button secondary" disabled={isPending} onClick={() => onApprove(false)}>
-          Approve Only
-        </button>
+        {role === "admin" ? (
+          <button className="button secondary" disabled={isPending} onClick={() => onApprove(false)}>
+            Approve Only
+          </button>
+        ) : null}
         <button className="button danger" disabled={isPending} onClick={onReject}>
           Reject
         </button>
       </div>
+      {initialStatus ? <div className="card-subtle">Current status: {initialStatus.replaceAll("_", " ")}.</div> : null}
       {message ? <div className="card-subtle">{message}</div> : null}
     </div>
   );

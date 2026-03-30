@@ -16,14 +16,19 @@ class PublishJobRepository:
         self.db.flush()
         return job
 
-    def list_ready(self, limit: int = 20) -> list[PublishJob]:
+    def claim_ready(self, limit: int = 20) -> list[PublishJob]:
         now = datetime.now(timezone.utc)
         stmt: Select[tuple[PublishJob]] = (
             select(PublishJob)
             .where(PublishJob.status == "queued", or_(PublishJob.scheduled_for.is_(None), PublishJob.scheduled_for <= now))
+            .with_for_update(skip_locked=True)
             .limit(limit)
         )
-        return list(self.db.scalars(stmt))
+        jobs = list(self.db.scalars(stmt))
+        for job in jobs:
+            job.status = "publishing"
+        self.db.flush()
+        return jobs
 
     def list_recent(self, limit: int = 50) -> list[PublishJob]:
         stmt = select(PublishJob).order_by(PublishJob.updated_at.desc()).limit(limit)

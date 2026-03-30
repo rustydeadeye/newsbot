@@ -1,15 +1,25 @@
 import { ApiErrorPanel } from "@/components/api-error-panel";
-import { PageHeader } from "@/components/page-header";
+import { EmptyState } from "@/components/empty-state";
+import { GuidePanel } from "@/components/guide-panel";
+import { ShellHeader } from "@/components/shell-header";
 import { getEvents } from "@/lib/api";
+import { requireServerViewer } from "@/lib/viewer";
 
 export default async function EventsPage() {
+  const { viewer, accessToken } = await requireServerViewer();
+  const role = viewer.role;
   let events;
   try {
-    events = await getEvents();
+    events = await getEvents(accessToken);
   } catch (error) {
     return (
       <div className="page-grid">
-        <PageHeader title="Events" description="Normalized source events after dedupe, scoring, and fact extraction." />
+        <ShellHeader
+          title="Events"
+          description="Track what Newsbot has identified across your coverage."
+          viewer={viewer}
+          freshnessLabel="Context and coverage view"
+        />
         <ApiErrorPanel
           title="Events feed unavailable"
           detail={error instanceof Error ? error.message : "Unknown API error"}
@@ -20,20 +30,48 @@ export default async function EventsPage() {
 
   return (
     <div className="page-grid">
-      <PageHeader title="Events" description="Normalized source events after dedupe, scoring, and fact extraction." />
-      <div className="card-grid">
+      <ShellHeader
+        eyebrow="Event Intelligence"
+        title="Events"
+        description={
+          role === "admin"
+            ? "Inspect the normalized event stream with operational scoring context."
+            : "See the underlying events Newsbot is tracking so you can understand what each draft is based on."
+        }
+        viewer={viewer}
+        freshnessLabel={role === "admin" ? "Operational context stream" : "Supporting context for review"}
+      />
+      <GuidePanel
+        eyebrow="Coverage view"
+        title={role === "admin" ? "Operations-friendly event feed" : "What happened and why it matters"}
+        description={
+          role === "admin"
+            ? "Use this screen to spot clusters, confidence shifts, and event quality before they become publishing issues."
+            : "Use this screen when you want more context behind the content Newsbot is asking you to review."
+        }
+      />
+      {events.length === 0 ? (
+        <EmptyState
+          title="No recent events"
+          description="As Newsbot ingests new source items, the event feed will populate here."
+        />
+      ) : null}
+      <div className="events-grid">
         {events.map((event) => (
-          <div key={event.id} className="card">
+          <div key={event.id} className="event-card">
             <div className="row space">
-              <span className="pill">{event.event_type}</span>
-              <span className="mono">{event.ticker ?? "MARKET"}</span>
+              <div className="row">
+                <span className="pill">{event.event_type}</span>
+                <span className="mono">{event.ticker ?? "MARKET"}</span>
+              </div>
+              <span className="event-score">Score {event.importance_score}</span>
             </div>
-            <div className="headline">{String(event.summary_facts.headline ?? event.entity_name ?? event.event_type)}</div>
-            <div className="card-subtle">
-              {String(event.summary_facts.source_name ?? "unknown")} | score {event.importance_score} | confidence{" "}
-              {event.confidence_score}
+            <div className="queue-row-title">{String(event.summary_facts.headline ?? event.entity_name ?? event.event_type)}</div>
+            <div className="event-card-meta">
+              <div className="card-subtle">Source {String(event.summary_facts.source_name ?? "Unknown")}</div>
+              <div className="card-subtle">Confidence {event.confidence_score}</div>
             </div>
-            <div className="mono" style={{ marginTop: 12 }}>{event.dedupe_key}</div>
+            {role === "admin" && event.dedupe_key ? <div className="mono event-detail">{event.dedupe_key}</div> : null}
           </div>
         ))}
       </div>

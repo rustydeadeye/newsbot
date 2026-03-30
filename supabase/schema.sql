@@ -26,6 +26,7 @@ create table if not exists source_items (
 
 create unique index if not exists idx_source_items_checksum on source_items(checksum);
 create index if not exists idx_source_items_unprocessed on source_items(id) where not processed;
+create index if not exists idx_source_items_source_id on source_items(source_id);
 
 create table if not exists events (
   id bigserial primary key,
@@ -54,6 +55,8 @@ create table if not exists event_entities (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+create index if not exists idx_events_source_item_id on events(source_item_id);
+create index if not exists idx_event_entities_event_id on event_entities(event_id);
 
 create table if not exists draft_posts (
   id bigserial primary key,
@@ -75,9 +78,13 @@ create table if not exists publish_jobs (
   scheduled_for timestamptz,
   attempt_count integer not null default 0,
   last_error text,
+  result_message text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+create index if not exists idx_publish_jobs_draft_post_id on publish_jobs(draft_post_id);
+
+alter table publish_jobs add column if not exists result_message text;
 
 create table if not exists publish_logs (
   id bigserial primary key,
@@ -88,6 +95,7 @@ create table if not exists publish_logs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+create index if not exists idx_publish_logs_publish_job_id on publish_logs(publish_job_id);
 
 create table if not exists creator_settings (
   id bigserial primary key,
@@ -102,6 +110,19 @@ create table if not exists creator_settings (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists workspace_users (
+  id bigserial primary key,
+  auth_user_id text not null unique,
+  email text not null unique,
+  display_name text,
+  role text not null default 'customer' check (role in ('admin', 'customer')),
+  is_active boolean not null default true,
+  last_seen_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_workspace_users_role on workspace_users(role);
+
 create table if not exists review_queue (
   id bigserial primary key,
   event_id bigint not null references events(id) on delete cascade,
@@ -111,6 +132,82 @@ create table if not exists review_queue (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+create index if not exists idx_review_queue_event_id on review_queue(event_id);
+
+alter table sources enable row level security;
+alter table source_items enable row level security;
+alter table events enable row level security;
+alter table event_entities enable row level security;
+alter table draft_posts enable row level security;
+alter table publish_jobs enable row level security;
+alter table publish_logs enable row level security;
+alter table creator_settings enable row level security;
+alter table workspace_users enable row level security;
+alter table review_queue enable row level security;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'sources' and policyname = 'sources_service_role_all'
+  ) then
+    create policy sources_service_role_all on sources for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'source_items' and policyname = 'source_items_service_role_all'
+  ) then
+    create policy source_items_service_role_all on source_items for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'events' and policyname = 'events_service_role_all'
+  ) then
+    create policy events_service_role_all on events for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'event_entities' and policyname = 'event_entities_service_role_all'
+  ) then
+    create policy event_entities_service_role_all on event_entities for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'draft_posts' and policyname = 'draft_posts_service_role_all'
+  ) then
+    create policy draft_posts_service_role_all on draft_posts for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'publish_jobs' and policyname = 'publish_jobs_service_role_all'
+  ) then
+    create policy publish_jobs_service_role_all on publish_jobs for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'publish_logs' and policyname = 'publish_logs_service_role_all'
+  ) then
+    create policy publish_logs_service_role_all on publish_logs for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'creator_settings' and policyname = 'creator_settings_service_role_all'
+  ) then
+    create policy creator_settings_service_role_all on creator_settings for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'workspace_users' and policyname = 'workspace_users_service_role_all'
+  ) then
+    create policy workspace_users_service_role_all on workspace_users for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'review_queue' and policyname = 'review_queue_service_role_all'
+  ) then
+    create policy review_queue_service_role_all on review_queue for all to service_role using (true) with check (true);
+  end if;
+end
+$$;
 
 insert into sources (name, type, base_url, poll_interval_sec, enabled, metadata)
 values

@@ -1,19 +1,33 @@
+import { AccessDenied } from "@/components/access-denied";
 import { ApiErrorPanel } from "@/components/api-error-panel";
-import { MetricCard } from "@/components/metric-card";
-import { PageHeader } from "@/components/page-header";
+import { KpiCard } from "@/components/kpi-card";
+import { PublishQueuePanel } from "@/components/publish-queue-panel";
+import { ShellHeader } from "@/components/shell-header";
+import { StatusPanel } from "@/components/status-panel";
 import { getPublishJobs, getPublishLogs } from "@/lib/api";
+import { requireServerViewer } from "@/lib/viewer";
 
 export default async function JobsPage() {
+  const { viewer, accessToken } = await requireServerViewer();
+  const role = viewer.role;
+  if (role !== "admin") {
+    return <AccessDenied title="Publishing" description="Track delivery queue health, failures, and posting outcomes." />;
+  }
   let jobs;
   let logs;
   try {
-    [jobs, logs] = await Promise.all([getPublishJobs(), getPublishLogs()]);
+    [jobs, logs] = await Promise.all([getPublishJobs(accessToken), getPublishLogs(accessToken)]);
   } catch (error) {
     return (
       <div className="page-grid">
-        <PageHeader title="Publish Jobs" description="Delivery queue, failures, and posting history." />
+        <ShellHeader
+          title="Publishing"
+          description="Delivery queue, failures, and posting history."
+          viewer={viewer}
+          freshnessLabel="Operational delivery workspace"
+        />
         <ApiErrorPanel
-          title="Publish jobs unavailable"
+          title="Publishing unavailable"
           detail={error instanceof Error ? error.message : "Unknown API error"}
         />
       </div>
@@ -22,51 +36,34 @@ export default async function JobsPage() {
   const queued = jobs.filter((job) => job.status === "queued").length;
   const posted = jobs.filter((job) => job.status === "posted").length;
   const failed = jobs.filter((job) => job.status === "failed").length;
+  const publishing = jobs.filter((job) => job.status === "publishing").length;
 
   return (
     <div className="page-grid">
-      <PageHeader title="Publish Jobs" description="Delivery queue, failures, and posting history." />
+      <ShellHeader
+        eyebrow="Publishing Operations"
+        title="Publishing"
+        description="Track queue movement, recover failures, and confirm what actually posted."
+        viewer={viewer}
+        freshnessLabel="Delivery queue and posting outcomes"
+      />
       <div className="metrics">
-        <MetricCard label="Queued" value={queued} />
-        <MetricCard label="Posted" value={posted} />
-        <MetricCard label="Failed" value={failed} />
-        <MetricCard label="Recent Logs" value={logs.length} />
+        <KpiCard label="Queued" value={queued} detail="Waiting to publish" tone={queued > 0 ? "warning" : "calm"} />
+        <KpiCard label="In Flight" value={publishing} detail="Currently publishing" />
+        <KpiCard label="Failed" value={failed} detail="Needs intervention" tone={failed > 0 ? "danger" : "calm"} />
+        <KpiCard label="Recent Logs" value={logs.length} detail="Recent posted activity" />
       </div>
-      <div className="card-grid">
-        <div className="panel">
-          <div className="headline">Recent Jobs</div>
-          <div className="log-list">
-            {jobs.length === 0 ? <div className="empty">No publish jobs yet.</div> : null}
-            {jobs.map((job) => (
-              <div key={job.id} className="log-item">
-                <div className="row space">
-                  <span className={job.status === "failed" ? "pill danger" : "pill"}>{job.status}</span>
-                  <span className="mono">{job.event?.ticker ?? "MARKET"}</span>
-                </div>
-                <div>{String(job.event?.summary_facts?.headline ?? job.draft?.draft_text ?? "Unknown job")}</div>
-                <div className="card-subtle">
-                  attempts {job.attempt_count} {job.last_error ? `| ${job.last_error}` : ""}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="panel">
-          <div className="headline">Recent Publish Logs</div>
-          <div className="log-list">
-            {logs.length === 0 ? <div className="empty">No publish logs yet.</div> : null}
-            {logs.map((log) => (
-              <div key={log.id} className="log-item">
-                <div className="row space">
-                  <span className="pill">posted</span>
-                  <span className="mono">{log.platform_post_id ?? "no-platform-id"}</span>
-                </div>
-                <div className="card-subtle">{log.posted_at ?? log.created_at}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      <StatusPanel
+        eyebrow="Operational priority"
+        title={failed > 0 ? "Resolve delivery failures first" : "Delivery flow is healthy"}
+        description={
+          failed > 0
+            ? "Publishing failures sit at the top of the admin workflow because they directly affect trust and output."
+            : "No failures are blocking output. Use the queue view below to monitor movement and recent delivery activity."
+        }
+        tone={failed > 0 ? "danger" : "default"}
+      />
+      <PublishQueuePanel jobs={jobs} logs={logs} />
     </div>
   );
 }

@@ -288,7 +288,15 @@ def _parse_date(value: str | None) -> datetime | None:
     if not value:
         return None
     normalized = value.strip()
-    for fmt in ("%d-%b-%Y", "%d-%m-%Y", "%d %b %Y", "%d-%B-%Y"):
+    for fmt in (
+        "%d-%b-%Y",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%d-%B-%Y",
+        "%d-%m-%y",
+    ):
         try:
             return datetime.strptime(normalized, fmt).replace(tzinfo=timezone.utc)
         except ValueError:

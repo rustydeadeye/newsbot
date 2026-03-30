@@ -1,0 +1,19 @@
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "supabase-access-token",
+      "description": "Supabase Personal Access Token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "supabase": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp?project_ref=vvndcdlvurordmdqozql",
+      "headers": {
+        "Authorization": "Bearer ${input:supabase-access-token}"
+      }
+    }
+  }
+}

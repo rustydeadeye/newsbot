@@ -1,4 +1,5 @@
-import { CreatorSettings, DraftSummary, EventSummary, PublishJob, PublishLog, ReviewItem, SourceSummary } from "@/lib/types";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { AuthMeResponse, CreatorSettings, DraftSummary, EventSummary, PublishJob, PublishLog, ReviewItem, SourceSummary } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -6,13 +7,33 @@ export function getApiBaseUrl() {
   return API_BASE_URL;
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+type FetchJsonOptions = RequestInit & {
+  accessToken?: string | null;
+};
+
+async function getAccessToken(accessToken?: string | null) {
+  if (accessToken) {
+    return accessToken;
+  }
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const supabase = getSupabaseBrowserClient();
+  const {
+    data: { session }
+  } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
+}
+
+async function fetchJson<T>(path: string, init?: FetchJsonOptions): Promise<T> {
+  const accessToken = await getAccessToken(init?.accessToken);
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...(init?.headers ?? {})
       },
       cache: "no-store"
@@ -30,12 +51,12 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function getReviewQueue() {
-  return fetchJson<ReviewItem[]>("/review");
+export function getReviewQueue(accessToken?: string | null) {
+  return fetchJson<ReviewItem[]>("/review", { accessToken });
 }
 
-export function getReviewDrafts() {
-  return fetchJson<DraftSummary[]>("/review/drafts");
+export function getReviewDrafts(accessToken?: string | null) {
+  return fetchJson<DraftSummary[]>("/review/drafts", { accessToken });
 }
 
 export function approveDraft(draftId: number, payload: { reviewer?: string; edited_text?: string; auto_queue?: boolean }) {
@@ -59,20 +80,20 @@ export function resolveReviewItem(reviewId: number, payload: { reviewer?: string
   });
 }
 
-export function getEvents() {
-  return fetchJson<EventSummary[]>("/events");
+export function getEvents(accessToken?: string | null) {
+  return fetchJson<EventSummary[]>("/events", { accessToken });
 }
 
-export function getSources() {
-  return fetchJson<SourceSummary[]>("/sources");
+export function getSources(accessToken?: string | null) {
+  return fetchJson<SourceSummary[]>("/sources", { accessToken });
 }
 
-export function getPublishJobs() {
-  return fetchJson<PublishJob[]>("/publish-jobs");
+export function getPublishJobs(accessToken?: string | null) {
+  return fetchJson<PublishJob[]>("/publish-jobs", { accessToken });
 }
 
-export function getPublishLogs() {
-  return fetchJson<PublishLog[]>("/publish-jobs/logs");
+export function getPublishLogs(accessToken?: string | null) {
+  return fetchJson<PublishLog[]>("/publish-jobs/logs", { accessToken });
 }
 
 export function retryPublishJob(jobId: number) {
@@ -82,8 +103,8 @@ export function retryPublishJob(jobId: number) {
   });
 }
 
-export function getCreatorSettings() {
-  return fetchJson<CreatorSettings>("/settings/creator");
+export function getCreatorSettings(accessToken?: string | null) {
+  return fetchJson<CreatorSettings>("/settings/creator", { accessToken });
 }
 
 export function updateCreatorSettings(payload: Partial<CreatorSettings>) {
@@ -91,4 +112,8 @@ export function updateCreatorSettings(payload: Partial<CreatorSettings>) {
     method: "PUT",
     body: JSON.stringify(payload)
   });
+}
+
+export function getAuthMe(accessToken: string) {
+  return fetchJson<AuthMeResponse>("/auth/me", { accessToken });
 }

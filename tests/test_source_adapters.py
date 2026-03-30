@@ -20,6 +20,13 @@ def test_parse_date_formats() -> None:
     assert parsed.year == 2026
 
 
+def test_parse_date_additional_live_formats() -> None:
+    assert _parse_date("29/03/2026") is not None
+    assert _parse_date("31 March 2026") is not None
+    assert _parse_date("30-March-2026") is not None
+    assert _parse_date("13-4-26") is not None
+
+
 def test_rss_payload_extracts_reference_and_subtype() -> None:
     payload = _rss_payload(
         "RBI Press Release: Monetary Policy Statement",

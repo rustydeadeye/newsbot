@@ -140,7 +140,9 @@ def publish_ready_jobs(db: Session) -> int:
     job_repo = PublishJobRepository(db)
     publisher = XPublisher()
     published = 0
-    for job in job_repo.list_ready():
+    jobs = job_repo.claim_ready()
+    db.commit()
+    for job in jobs:
         draft = db.get(DraftPost, job.draft_post_id)
         if draft is None:
             job.status = "failed"
@@ -157,7 +159,18 @@ def publish_ready_jobs(db: Session) -> int:
                 continue
             job.status = "posted"
             job.result_message = None
-            db.add(PublishLog(publish_job_id=job.id, platform_post_id=response.get("data", {}).get("id"), response_payload=response))
+            draft.status = "posted"
+            event = db.get(Event, draft.event_id)
+            if event is not None:
+                event.status = "posted"
+            db.add(
+                PublishLog(
+                    publish_job_id=job.id,
+                    platform_post_id=response.get("data", {}).get("id"),
+                    posted_at=datetime.now(timezone.utc),
+                    response_payload=response,
+                )
+            )
             published += 1
             logger.info("job_id=%s published successfully", job.id)
         except RuntimeError as exc:
@@ -250,7 +263,17 @@ def _event_latest_date(facts: dict, item) -> datetime.date | None:
         raw = facts.get(key)
         if not raw or not isinstance(raw, str):
             continue
-        for fmt in ("%d-%b-%Y", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"):
+        for fmt in (
+            "%d-%b-%Y",
+            "%d-%B-%Y",
+            "%d-%m-%Y",
+            "%d/%m/%Y",
+            "%d %b %Y",
+            "%d %B %Y",
+            "%d-%m-%y",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%d",
+        ):
             try:
                 return datetime.strptime(raw, fmt).date()
             except ValueError:

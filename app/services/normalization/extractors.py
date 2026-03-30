@@ -25,7 +25,7 @@ def extract_facts(source: Source, item: SourceItem) -> dict:
     period = item.raw_payload.get("period") or _extract_period(title)
     numbers = _extract_numbers(title)
     filing_type = _extract_filing_type(item, event_type, section)
-    subject_key = _subject_key(item, event_type, section)
+    subject_key = _subject_key(source, item, event_type, section)
     return {
         "headline": title,
         "source_name": source.name,
@@ -110,12 +110,45 @@ def _extract_filing_type(item: SourceItem, event_type: str, section: str | None)
     return mapping.get(event_type, section)
 
 
-def _subject_key(item: SourceItem, event_type: str, section: str | None) -> str:
+def _subject_key(source: Source, item: SourceItem, event_type: str, section: str | None) -> str:
+    if source.name == "rbi_press_releases" and event_type == "macro_release":
+        return _macro_subject_key(item.title)
+    if source.name == "bse_announcements" and event_type in {"bonus_split", "dividend"}:
+        return _corporate_action_subject_key(source, item, event_type)
     if section == "corporate_actions":
-        return normalize_subject(item.raw_payload.get("subject") or item.title)
+        return _corporate_action_subject_key(source, item, event_type)
     if event_type == "earnings":
         return normalize_subject(f"{item.raw_payload.get('subject') or item.title}|{item.raw_payload.get('period') or _extract_period(item.title) or ''}")
     return normalize_subject(item.raw_payload.get("subject") or item.title)
+
+
+def _macro_subject_key(title: str) -> str:
+    lowered = title.lower().strip()
+    lowered = re.sub(r"\bresult of (the )?", "", lowered)
+    lowered = re.sub(r"\brbi to conduct\b", "", lowered)
+    lowered = re.sub(r"\bauction held on\b.*$", "auction", lowered)
+    lowered = re.sub(r"\bon\b.*$", "", lowered)
+    lowered = re.sub(r"\b(first|second|third|fourth)\b", "", lowered)
+    lowered = re.sub(r"\bunder\s+laf\b", "", lowered)
+    return normalize_subject(lowered)
+
+
+def _corporate_action_subject_key(source: Source, item: SourceItem, event_type: str) -> str:
+    raw_subject = item.raw_payload.get("subject") or item.title
+    normalized = str(raw_subject).lower().strip()
+    normalized = re.sub(r"\([^)]*\)", "", normalized)
+    if source.name == "bse_announcements":
+        normalized = re.sub(
+            r"\b(regular plan|direct plan|bonus plan|bonus units|growth plan|growth option|idcw option|daily dividend option)\b",
+            " ",
+            normalized,
+        )
+    preserved_action = normalize_subject(normalized)
+    normalized = re.sub(r"\b(dividend|bonus|split)\b", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if normalized and re.fullmatch(r"[\d:\s.]+", normalized):
+        return preserved_action
+    return normalize_subject(f"{normalized}|{event_type}")
 
 
 def _exchange(source_name: str, ticker: str | None) -> str | None:
@@ -163,7 +196,17 @@ def _latest_relevant_date(raw_payload: dict, published_at) -> datetime.date | No
 def _parse_date_like(value: str | None) -> datetime.date | None:
     if not value or not isinstance(value, str):
         return None
-    for fmt in ("%d-%b-%Y", "%d-%m-%Y", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"):
+    for fmt in (
+        "%d-%b-%Y",
+        "%d-%B-%Y",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%d-%m-%y",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d",
+    ):
         try:
             return datetime.strptime(value, fmt).date()
         except ValueError:

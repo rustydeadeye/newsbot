@@ -4,9 +4,16 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { updateCreatorSettings } from "@/lib/api";
+import { ViewerRole } from "@/lib/session";
 import { CreatorSettings } from "@/lib/types";
 
-export function SettingsForm({ settings }: { settings: CreatorSettings }) {
+export function SettingsForm({
+  settings,
+  role
+}: {
+  settings: CreatorSettings;
+  role: ViewerRole;
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -52,10 +59,12 @@ export function SettingsForm({ settings }: { settings: CreatorSettings }) {
         <span className="field-label">Language</span>
         <input className="editor" value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value })} />
       </label>
-      <label>
-        <span className="field-label">Max Posts Per Hour</span>
-        <input className="editor" value={form.max_posts_per_hour} onChange={(event) => setForm({ ...form, max_posts_per_hour: event.target.value })} />
-      </label>
+      {role === "admin" ? (
+        <label>
+          <span className="field-label">Max Posts Per Hour</span>
+          <input className="editor" value={form.max_posts_per_hour} onChange={(event) => setForm({ ...form, max_posts_per_hour: event.target.value })} />
+        </label>
+      ) : null}
       <label>
         <span className="field-label">Watchlist</span>
         <textarea className="editor" value={form.watchlist} onChange={(event) => setForm({ ...form, watchlist: event.target.value })} />
@@ -66,7 +75,7 @@ export function SettingsForm({ settings }: { settings: CreatorSettings }) {
       </label>
       <div className="actions">
         <button className="button" disabled={isPending} onClick={submit}>
-          Save Settings
+          {role === "admin" ? "Save Workspace Settings" : "Save My Settings"}
         </button>
       </div>
       {message ? <div className="card-subtle">{message}</div> : null}

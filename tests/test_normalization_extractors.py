@@ -72,3 +72,115 @@ def test_stale_exchange_earnings_flagged() -> None:
 
     assert facts["event_class"] == "earnings"
     assert facts["is_stale"] is True
+
+
+def test_extract_bse_dates_support_additional_live_formats() -> None:
+    source = Source(name="bse_announcements", type="rss", base_url="https://example.com")
+    item = SourceItem(
+        source_id=1,
+        external_id="corporate_actions:UTI:31 March 2026:Bonus",
+        url="https://example.com/uti",
+        title="UTI Bonus 1:1",
+        published_at=datetime(2026, 3, 30, tzinfo=timezone.utc),
+        raw_payload={
+            "section": "corporate_actions",
+            "symbol": "UTI",
+            "subject": "Bonus 1:1",
+            "broadcast_date": "31 March 2026",
+            "event_date": "29/03/2026",
+        },
+        checksum="x",
+    )
+
+    facts = extract_facts(source, item)
+
+    assert facts["broadcast_date"] == "31 March 2026"
+    assert facts["event_date"] == "29/03/2026"
+    assert facts["is_stale"] is False
+
+
+def test_rbi_macro_subject_key_collapses_auction_variants() -> None:
+    source = Source(name="rbi_press_releases", type="rss", base_url="https://example.com")
+    result_item = SourceItem(
+        source_id=1,
+        external_id="result",
+        url="https://example.com/result",
+        title="Result of the Second 3-day Variable Rate Repo (VRR) auction held on March 30, 2026",
+        published_at=datetime(2026, 3, 30, tzinfo=timezone.utc),
+        raw_payload={},
+        checksum="x",
+    )
+    conduct_item = SourceItem(
+        source_id=1,
+        external_id="conduct",
+        url="https://example.com/conduct",
+        title="RBI to conduct Second 3-day Variable Rate Repo (VRR) auction under LAF on March 30, 2026",
+        published_at=datetime(2026, 3, 30, tzinfo=timezone.utc),
+        raw_payload={},
+        checksum="y",
+    )
+
+    result_facts = extract_facts(source, result_item)
+    conduct_facts = extract_facts(source, conduct_item)
+
+    assert result_facts["event_class"] == "macro_release"
+    assert conduct_facts["event_class"] == "macro_release"
+    assert result_facts["subject_key"] == conduct_facts["subject_key"]
+
+
+def test_bse_bonus_subject_key_collapses_plan_variants() -> None:
+    source = Source(name="bse_announcements", type="rss", base_url="https://example.com")
+    regular_item = SourceItem(
+        source_id=1,
+        external_id="regular",
+        url="https://example.com/regular",
+        title="UTI Low Duration Fund Regular Plan Bonus (9002611)",
+        published_at=datetime(2026, 3, 30, tzinfo=timezone.utc),
+        raw_payload={"section": "corporate_actions", "symbol": "UTI", "subject": "UTI Low Duration Fund Regular Plan Bonus (9002611)"},
+        checksum="x1",
+    )
+    units_item = SourceItem(
+        source_id=1,
+        external_id="units",
+        url="https://example.com/units",
+        title="UTI Low Duration Fund Bonus Units Bonus (9002591)",
+        published_at=datetime(2026, 3, 30, tzinfo=timezone.utc),
+        raw_payload={"section": "corporate_actions", "symbol": "UTI", "subject": "UTI Low Duration Fund Bonus Units Bonus (9002591)"},
+        checksum="x2",
+    )
+
+    regular_facts = extract_facts(source, regular_item)
+    units_facts = extract_facts(source, units_item)
+
+    assert regular_facts["event_class"] == "bonus_split"
+    assert units_facts["event_class"] == "bonus_split"
+    assert regular_facts["subject_key"] == units_facts["subject_key"]
+
+
+def test_bse_bonus_subject_key_collapses_announcement_variants() -> None:
+    source = Source(name="bse_announcements", type="rss", base_url="https://example.com")
+    regular_item = SourceItem(
+        source_id=1,
+        external_id="regular-ann",
+        url="https://example.com/regular-ann",
+        title="UTI Low Duration Fund Regular Plan Bonus (9002611)",
+        published_at=None,
+        raw_payload={"section": "announcements", "symbol": "UTI", "subject": "UTI Low Duration Fund Regular Plan Bonus (9002611)"},
+        checksum="xa1",
+    )
+    units_item = SourceItem(
+        source_id=1,
+        external_id="units-ann",
+        url="https://example.com/units-ann",
+        title="UTI Low Duration Fund Bonus Units Bonus (9002591)",
+        published_at=None,
+        raw_payload={"section": "announcements", "symbol": "UTI", "subject": "UTI Low Duration Fund Bonus Units Bonus (9002591)"},
+        checksum="xa2",
+    )
+
+    regular_facts = extract_facts(source, regular_item)
+    units_facts = extract_facts(source, units_item)
+
+    assert regular_facts["event_class"] == "bonus_split"
+    assert units_facts["event_class"] == "bonus_split"
+    assert regular_facts["subject_key"] == units_facts["subject_key"]

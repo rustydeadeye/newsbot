@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import type { Route } from "next";
 
+import { NavShell } from "@/components/nav-shell";
+import { getServerViewer } from "@/lib/viewer";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -8,41 +10,40 @@ export const metadata: Metadata = {
   description: "Operations dashboard for finance news automation"
 };
 
-const navItems = [
-  { href: "/", label: "Review Queue" },
-  { href: "/drafts", label: "Draft Review" },
-  { href: "/events", label: "Events" },
-  { href: "/jobs", label: "Publish Jobs" },
-  { href: "/settings", label: "Settings" }
+const customerNavItems = [
+  { href: "/" as Route, label: "Home" },
+  { href: "/drafts" as Route, label: "Drafts" },
+  { href: "/events" as Route, label: "Events" },
+  { href: "/settings" as Route, label: "Settings" }
 ];
 
-export default function RootLayout({
+const adminNavItems = [
+  { href: "/" as Route, label: "Home" },
+  { href: "/drafts" as Route, label: "Drafts" },
+  { href: "/events" as Route, label: "Events" },
+  { href: "/jobs" as Route, label: "Publishing" },
+  { href: "/settings" as Route, label: "Settings" }
+];
+
+export default async function RootLayout({
   children
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const auth = await getServerViewer();
   return (
     <html lang="en">
       <body>
-        <div className="shell">
-          <aside className="sidebar">
-            <div className="brand">
-              <div className="brand-mark">N</div>
-              <div>
-                <h1>Newsbot Desk</h1>
-                <p>Review, approve, and ship finance updates without losing editorial control.</p>
-              </div>
-            </div>
-            <nav className="nav">
-              {navItems.map((item) => (
-                <Link key={item.href} className="nav-link" href={item.href}>
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-          </aside>
-          <main className="content">{children}</main>
-        </div>
+        {auth ? (
+          <div className="shell">
+            <aside className="sidebar">
+              <NavShell viewer={auth.viewer} items={auth.viewer.role === "admin" ? adminNavItems : customerNavItems} />
+            </aside>
+            <main className="content">{children}</main>
+          </div>
+        ) : (
+          children
+        )}
       </body>
     </html>
   );
