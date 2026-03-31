@@ -17,12 +17,14 @@ export type EventSummary = {
 export type DraftSummary = {
   id: number;
   event_id: number;
+  workspace_user_id?: number | null;
   platform: string;
   status: string;
   prompt_version: string;
   draft_text: string;
   safety_flags: Record<string, unknown>;
   needs_review: boolean;
+  publish_job?: PublishJob | null;
   event?: EventSummary | null;
 };
 

@@ -1,6 +1,7 @@
 import { ReviewActions } from "@/components/review-actions";
+import { getRecommendedPublishPlan } from "@/lib/publish-plan";
 import { ViewerRole } from "@/lib/session";
-import { ReviewItem } from "@/lib/types";
+import { CreatorSettings, ReviewItem } from "@/lib/types";
 
 function getLifecycleLabel(status: string) {
   if (status === "open") {
@@ -38,11 +39,16 @@ function getTypeLabel(item: ReviewItem, role: ViewerRole) {
 
 export function LeadReviewCard({
   item,
-  role
+  role,
+  canPublish = false,
+  publishSettings = null,
 }: {
   item: ReviewItem;
   role: ViewerRole;
+  canPublish?: boolean;
+  publishSettings?: CreatorSettings | null;
 }) {
+  const recommendedPlan = canPublish ? getRecommendedPublishPlan(publishSettings) : null;
   return (
     <div className="lead-review-card">
       <div className="lead-review-top">
@@ -81,6 +87,16 @@ export function LeadReviewCard({
               <span>{String(item.event?.summary_facts?.source_name ?? "Unknown source")}</span>
             </div>
           </div>
+          <div className="lead-review-block">
+            <div className="section-label">What happens next</div>
+            <p className="card-subtle">
+              {canPublish && recommendedPlan
+                ? recommendedPlan.mode === "now"
+                  ? "Approve to send this draft into publishing right away. You can still keep it approved without scheduling if you want to hold it."
+                  : `Approve to schedule this draft for the next available posting slot. Newsbot will hold it until ${recommendedPlan.summary.toLowerCase()}.`
+                : "Approve to save this draft as ready. Once you connect your X account, approved drafts can move into publishing."}
+            </p>
+          </div>
         </div>
         <div className="lead-review-grid">
           <div className="lead-review-block">
@@ -114,6 +130,8 @@ export function LeadReviewCard({
             role={role}
             initialStatus={item.draft.status}
             compact
+            canPublish={canPublish}
+            publishSettings={publishSettings}
           />
         </div>
       ) : null}

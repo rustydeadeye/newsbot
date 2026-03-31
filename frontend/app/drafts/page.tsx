@@ -12,7 +12,8 @@ import { RejectedDraftsSection } from "@/components/rejected-drafts-section";
 import { ReviewActions } from "@/components/review-actions";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
-import { getCurrentPipelineRun, getRejectedDrafts, getReviewDrafts } from "@/lib/api";
+import { getApprovedDrafts, getCreatorSettings, getCurrentPipelineRun, getRejectedDrafts, getReviewDrafts } from "@/lib/api";
+import { formatPublishTime } from "@/lib/publish-plan";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
 export default async function DraftsPage({
@@ -44,13 +45,17 @@ export default async function DraftsPage({
     redirect("/onboarding");
   }
   let drafts;
+  let approvedDrafts;
   let rejectedDrafts;
   let currentRun = null;
+  let customerSettings = null;
   try {
-    [drafts, rejectedDrafts, currentRun] = await Promise.all([
+    [drafts, approvedDrafts, rejectedDrafts, currentRun, customerSettings] = await Promise.all([
       getReviewDrafts(accessToken),
+      role === "customer" ? getApprovedDrafts(accessToken) : Promise.resolve([]),
       getRejectedDrafts(accessToken),
       role === "customer" ? getCurrentPipelineRun(accessToken) : Promise.resolve(null),
+      role === "customer" ? getCreatorSettings(accessToken) : Promise.resolve(null),
     ]);
   } catch (error) {
     return (
@@ -115,6 +120,20 @@ export default async function DraftsPage({
             : "Use this screen when you want more room to edit before approving or rejecting a draft."
         }
       />
+      {role === "customer" && approvedDrafts.length > 0 ? (
+        <StatusPanel
+          eyebrow="Approved drafts"
+          title={
+            approvedDrafts.find((draft) => draft.publish_job?.scheduled_for)
+              ? `Next scheduled post: ${formatPublishTime(
+                  approvedDrafts.find((draft) => draft.publish_job?.scheduled_for)?.publish_job?.scheduled_for as string,
+                  customerSettings?.timezone ?? "Asia/Kolkata"
+                )}`
+              : "Approved drafts are waiting in your publishing flow"
+          }
+          description="Approved drafts no longer disappear. Keep editing below, and use the approved section to track what will post next."
+        />
+      ) : null}
       <div className="draft-list">
         {sortedDrafts.length === 0 ? (
           <EmptyState
@@ -173,11 +192,47 @@ export default async function DraftsPage({
               </div>
             </div>
             <div className="draft-workbench-editor">
-              <ReviewActions draftId={draft.id} initialText={draft.draft_text} role={role} initialStatus={draft.status} compact />
+              <ReviewActions
+                draftId={draft.id}
+                initialText={draft.draft_text}
+                role={role}
+                initialStatus={draft.status}
+                compact
+                canPublish={Boolean(customerSettings?.x_connected)}
+                publishSettings={customerSettings}
+              />
             </div>
           </div>
         ))}
       </div>
+      {role === "customer" && approvedDrafts.length > 0 ? (
+        <div className="panel">
+          <div className="section-title">Approved & scheduled</div>
+          <div className="stack" style={{ marginTop: "0.75rem" }}>
+            {approvedDrafts.map((draft) => (
+              <div key={draft.id} className="publish-row">
+                <div className="row space">
+                  <span className={draft.status === "posted" ? "pill success" : draft.status === "queued" ? "pill warn" : "pill"}>
+                    {draft.status.replaceAll("_", " ")}
+                  </span>
+                  <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
+                </div>
+                <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                <div className="card-subtle">{draft.draft_text}</div>
+                <div className="card-subtle">
+                  {draft.publish_job?.scheduled_for
+                    ? `Scheduled for ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+                        new Date(draft.publish_job.scheduled_for)
+                      )}`
+                    : draft.publish_job
+                      ? "Queued for immediate publishing"
+                      : "Approved and waiting for your next publishing step"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {rejectedDrafts.length > 0 ? (
         <RejectedDraftsSection drafts={rejectedDrafts} />
       ) : null}

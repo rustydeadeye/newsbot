@@ -44,8 +44,30 @@ class PublishJobRepository:
         stmt = select(PublishJob).order_by(PublishJob.updated_at.desc()).limit(limit)
         return list(self.db.scalars(stmt))
 
+    def list_recent_for_workspace_user(self, workspace_user_id: int, limit: int = 50) -> list[PublishJob]:
+        stmt = (
+            select(PublishJob)
+            .join(DraftPost, DraftPost.id == PublishJob.draft_post_id)
+            .where(DraftPost.workspace_user_id == workspace_user_id)
+            .order_by(PublishJob.updated_at.desc())
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt))
+
     def get(self, job_id: int) -> PublishJob | None:
         return self.db.get(PublishJob, job_id)
+
+    def get_for_workspace_user(self, job_id: int, workspace_user_id: int) -> PublishJob | None:
+        stmt = (
+            select(PublishJob)
+            .join(DraftPost, DraftPost.id == PublishJob.draft_post_id)
+            .where(
+                PublishJob.id == job_id,
+                DraftPost.workspace_user_id == workspace_user_id,
+            )
+            .limit(1)
+        )
+        return self.db.scalar(stmt)
 
     def count_recent_posted(self, since: datetime) -> int:
         stmt = select(func.count(PublishJob.id)).where(
@@ -57,6 +79,15 @@ class PublishJobRepository:
     def exists_for_draft(self, draft_post_id: int) -> bool:
         stmt = select(PublishJob.id).where(PublishJob.draft_post_id == draft_post_id).limit(1)
         return self.db.scalar(stmt) is not None
+
+    def latest_for_draft(self, draft_post_id: int) -> PublishJob | None:
+        stmt = (
+            select(PublishJob)
+            .where(PublishJob.draft_post_id == draft_post_id)
+            .order_by(PublishJob.updated_at.desc(), PublishJob.id.desc())
+            .limit(1)
+        )
+        return self.db.scalar(stmt)
 
     def find_recent_conflict(
         self,

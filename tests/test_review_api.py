@@ -12,7 +12,9 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
 from app.api.security import ViewerContext, get_current_viewer
+from app.models.customer import CustomerProfile
 from app.models.event import DraftPost, Event
+from app.models.job import PublishJob
 from app.models.review import ReviewQueueItem
 
 
@@ -128,6 +130,40 @@ def test_customer_approve_draft_does_not_auto_queue() -> None:
     assert response.json()["queued"] is False
     db.refresh(draft)
     assert draft.status == "approved"
+
+
+def test_customer_approve_draft_queues_when_x_connected() -> None:
+    client, db = _build_client(role="customer")
+    event = Event(
+        event_type="earnings",
+        entity_type="company",
+        entity_name="TCS",
+        ticker="TCS",
+        source_priority=95,
+        occurred_at=datetime.now(timezone.utc),
+        summary_facts={"headline": "TCS Results", "subject_key": "financial-results"},
+        importance_score=90,
+        confidence_score=0.95,
+        dedupe_key="earnings|tcs|2026-03-28|financial-results",
+        status="drafted",
+    )
+    draft = DraftPost(event=event, workspace_user_id=1, draft_text="Old text", status="draft", needs_review=True)
+    item = ReviewQueueItem(event=event, workspace_user_id=1, reason="manual_review")
+    profile = CustomerProfile(workspace_user_id=1, token_store={"x_access_token": "token"})
+    db.add_all([event, draft, item, profile])
+    db.commit()
+
+    response = client.post(
+        f"/review/drafts/{draft.id}/approve",
+        json={"reviewer": "customer-a", "edited_text": "New text", "auto_queue": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["queued"] is True
+    db.refresh(draft)
+    assert draft.status == "queued"
+    job = db.query(PublishJob).filter(PublishJob.draft_post_id == draft.id).one()
+    assert job.status == "queued"
 
 
 def test_reject_draft_marks_rejected() -> None:

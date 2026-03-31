@@ -4,39 +4,66 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { approveDraft, rejectDraft } from "@/lib/api";
+import { formatPublishTime, getRecommendedPublishPlan } from "@/lib/publish-plan";
 import { ViewerRole } from "@/lib/session";
+import { CreatorSettings } from "@/lib/types";
 
 export function ReviewActions({
   draftId,
   initialText,
   role,
   initialStatus,
-  compact = false
+  compact = false,
+  canPublish = false,
+  publishSettings = null,
 }: {
   draftId: number;
   initialText: string;
   role: ViewerRole;
   initialStatus?: string;
   compact?: boolean;
+  canPublish?: boolean;
+  publishSettings?: CreatorSettings | null;
 }) {
   const router = useRouter();
   const [text, setText] = useState(initialText);
   const [reason, setReason] = useState("Needs rewrite");
   const [message, setMessage] = useState<string | null>(null);
+  const [scheduleLater, setScheduleLater] = useState(false);
+  const [scheduledFor, setScheduledFor] = useState("");
+  const [lastAction, setLastAction] = useState<"approved" | "rejected" | null>(null);
   const [isPending, startTransition] = useTransition();
+  const recommendedPlan = getRecommendedPublishPlan(publishSettings);
 
   function onApprove(autoQueue: boolean) {
     startTransition(async () => {
       try {
+        if (autoQueue && scheduleLater && scheduledFor) {
+          const selectedDate = new Date(scheduledFor);
+          if (Number.isNaN(selectedDate.getTime()) || selectedDate.getTime() <= Date.now()) {
+            setMessage("Choose a future time for scheduled posting.");
+            return;
+          }
+        }
         const result = await approveDraft(draftId, {
           edited_text: text,
-          auto_queue: autoQueue
+          auto_queue: autoQueue,
+          scheduled_for: autoQueue
+            ? scheduleLater && scheduledFor
+              ? new Date(scheduledFor).toISOString()
+              : recommendedPlan?.mode === "scheduled"
+                ? recommendedPlan.scheduledFor
+                : null
+            : null,
         });
         if (result.warning === "x_account_not_connected") {
-          setMessage("Draft approved but not queued — connect an X account in Settings first.");
+          setMessage("Draft approved. Connect your X account in Settings when you are ready to schedule publishing.");
+        } else if (result.publish_job?.scheduled_for) {
+          setMessage(`Approved and scheduled for ${formatPublishTime(result.publish_job.scheduled_for, publishSettings?.timezone ?? "Asia/Kolkata")}.`);
         } else {
-          setMessage(result.queued ? "Approved and queued." : "Approved and left unqueued.");
+          setMessage(result.queued ? "Approved and queued for immediate publishing." : "Approved and left unqueued.");
         }
+        setLastAction("approved");
         router.refresh();
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Approve failed");
@@ -49,6 +76,7 @@ export function ReviewActions({
       try {
         await rejectDraft(draftId, { reason });
         setMessage("Draft rejected.");
+        setLastAction("rejected");
         router.refresh();
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Reject failed");
@@ -86,21 +114,67 @@ export function ReviewActions({
         </div>
         <input className="editor" value={reason} onChange={(event) => setReason(event.target.value)} maxLength={200} />
       </label>
+      {role === "customer" && canPublish && recommendedPlan ? (
+        <div className="publish-plan-card">
+          <div className="section-label">Recommended timing</div>
+          <div className="publish-plan-title">{recommendedPlan.summary}</div>
+          <div className="card-subtle">{recommendedPlan.helper}</div>
+          <div className="card-subtle">Timezone: {recommendedPlan.timezone}</div>
+        </div>
+      ) : null}
       <div className="actions">
-        <button className="button" disabled={isPending || isOverLimit} onClick={() => onApprove(role === "admin")}>
-          {isPending ? "Approving…" : role === "admin" ? "Approve + Queue" : "Approve"}
+        <button className="button" disabled={isPending || isOverLimit} onClick={() => onApprove(role === "admin" || canPublish)}>
+          {isPending
+            ? "Approving…"
+            : role === "admin"
+              ? "Approve + Queue"
+              : canPublish
+                ? recommendedPlan?.mode === "now"
+                  ? "Approve & Post Now"
+                  : "Approve & Schedule"
+                : "Approve only"}
         </button>
         {role === "admin" ? (
           <button className="button secondary" disabled={isPending || isOverLimit} onClick={() => onApprove(false)}>
             {isPending ? "Approving…" : "Approve Only"}
           </button>
+        ) : canPublish ? (
+          <>
+            <button className="button secondary" disabled={isPending || isOverLimit} onClick={() => onApprove(false)}>
+              {isPending ? "Approving…" : "Save as approved"}
+            </button>
+            <button className="button secondary" disabled={isPending || isOverLimit} onClick={() => setScheduleLater((value) => !value)}>
+              {scheduleLater ? "Use recommended timing" : "Choose time"}
+            </button>
+          </>
         ) : null}
         <button className="button danger" disabled={isPending} onClick={onReject}>
           {isPending ? "Rejecting…" : "Reject"}
         </button>
       </div>
+      {role === "customer" ? (
+        <div className="card-subtle">
+          {canPublish
+            ? "Approving will queue this draft for posting. You can keep the recommended timing or choose a specific date and time."
+            : "Approving marks this draft as ready. Connect your X account in Settings when you want approved drafts to move into publishing."}
+        </div>
+      ) : null}
+      {canPublish && scheduleLater ? (
+        <label>
+          <div className="field-label">Post at a specific time</div>
+          <div className="card-subtle">Pick a custom posting time in {publishSettings?.timezone ?? "Asia/Kolkata"}.</div>
+          <input
+            className="editor"
+            type="datetime-local"
+            value={scheduledFor}
+            min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+            onChange={(event) => setScheduledFor(event.target.value)}
+          />
+        </label>
+      ) : null}
       {isOverLimit ? <div className="card-subtle">Shorten the text before approving ({Math.abs(charRemaining)} chars over limit).</div> : null}
       {initialStatus ? <div className="card-subtle">Current status: {initialStatus.replaceAll("_", " ")}.</div> : null}
+      {lastAction === "approved" ? <div className="card-subtle">This draft will now leave the live review queue and move into the next publishing state.</div> : null}
       {message ? <div className="card-subtle">{message}</div> : null}
     </div>
   );

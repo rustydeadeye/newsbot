@@ -1,15 +1,19 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.schemas import DraftRejectAction, DraftReviewAction, ReviewResolveAction
 from app.api.security import ViewerContext, get_current_viewer
 from app.db.session import get_db
+from app.models.job import PublishJob
 from app.models.review import ReviewQueueItem
 from app.pipeline import enqueue_approved_draft
 from app.repositories.creators import CreatorSettingsRepository
 from app.repositories.customers import CustomerProfileRepository
 from app.repositories.drafts import DraftRepository
 from app.repositories.events import EventRepository
+from app.repositories.jobs import PublishJobRepository
 from app.repositories.review import ReviewQueueRepository
 
 router = APIRouter()
@@ -27,6 +31,14 @@ def _serialize_event(event, viewer: ViewerContext) -> dict | None:
 
 def _viewer_draft(draft_repo: DraftRepository, event_id: int, viewer: ViewerContext):
     return draft_repo.latest_for_event(event_id, viewer.workspace_user_id if viewer.is_customer else None)
+
+
+def _serialize_draft(draft, job_repo: PublishJobRepository | None = None) -> dict:
+    payload = draft.to_dict()
+    if job_repo is not None:
+        publish_job = job_repo.latest_for_draft(draft.id)
+        payload["publish_job"] = publish_job.to_dict() if publish_job else None
+    return payload
 
 
 @router.get("")
@@ -82,6 +94,26 @@ def list_review_drafts(
     return payload
 
 
+@router.get("/drafts/approved")
+def list_approved_drafts(
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> list[dict]:
+    draft_repo = DraftRepository(db)
+    event_repo = EventRepository(db)
+    job_repo = PublishJobRepository(db)
+    drafts = (
+        draft_repo.list_customer_post_approval_for_workspace_user(viewer.workspace_user_id)
+        if viewer.is_customer
+        else []
+    )
+    payload = []
+    for draft in drafts:
+        event = event_repo.get(draft.event_id)
+        payload.append({**_serialize_draft(draft, job_repo), "event": _serialize_event(event, viewer)})
+    return payload
+
+
 @router.post("/drafts/{draft_id}/approve")
 def approve_draft(
     draft_id: int,
@@ -91,6 +123,7 @@ def approve_draft(
 ) -> dict:
     draft_repo = DraftRepository(db)
     review_repo = ReviewQueueRepository(db)
+    job_repo = PublishJobRepository(db)
     draft = draft_repo.get(draft_id)
     if draft is None or (viewer.is_customer and draft.workspace_user_id != viewer.workspace_user_id):
         raise HTTPException(status_code=404, detail="Draft not found")
@@ -111,6 +144,7 @@ def approve_draft(
 
     queued = False
     warning: str | None = None
+    publish_job: PublishJob | None = None
     if action.auto_queue and viewer.is_admin:
         creator_settings = CreatorSettingsRepository(db).get_or_create_default()
         if not creator_settings.to_dict().get("x_connected"):
@@ -121,9 +155,20 @@ def approve_draft(
         profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(viewer.workspace_user_id)
         if not profile.to_dict().get("x_connected"):
             warning = "x_account_not_connected"
+        elif action.scheduled_for and action.scheduled_for <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=422, detail="scheduled_for must be in the future")
+        elif job_repo.exists_for_draft(draft.id):
+            queued = True
+            publish_job = job_repo.latest_for_draft(draft.id)
+        else:
+            publish_job = job_repo.add(PublishJob(draft_post_id=draft.id, scheduled_for=action.scheduled_for))
+            draft.status = "queued"
+            queued = True
 
     db.commit()
-    result = {"draft": draft.to_dict(), "queued": queued}
+    result = {"draft": _serialize_draft(draft, job_repo), "queued": queued}
+    if publish_job:
+        result["publish_job"] = publish_job.to_dict()
     if warning:
         result["warning"] = warning
     return result

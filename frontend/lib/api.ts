@@ -67,14 +67,21 @@ export function getRejectedDrafts(accessToken?: string | null) {
   return fetchJson<DraftSummary[]>("/review/drafts/rejected", { accessToken });
 }
 
+export function getApprovedDrafts(accessToken?: string | null) {
+  return fetchJson<DraftSummary[]>("/review/drafts/approved", { accessToken });
+}
+
 export function reopenDraft(draftId: number) {
   return fetchJson<DraftSummary>(`/review/drafts/${draftId}/reopen`, {
     method: "POST"
   });
 }
 
-export function approveDraft(draftId: number, payload: { reviewer?: string; edited_text?: string; auto_queue?: boolean }) {
-  return fetchJson<{ draft: DraftSummary; queued: boolean; warning?: string }>(`/review/drafts/${draftId}/approve`, {
+export function approveDraft(
+  draftId: number,
+  payload: { reviewer?: string; edited_text?: string; auto_queue?: boolean; scheduled_for?: string | null }
+) {
+  return fetchJson<{ draft: DraftSummary; queued: boolean; warning?: string; publish_job?: PublishJob | null }>(`/review/drafts/${draftId}/approve`, {
     method: "POST",
     body: JSON.stringify(payload)
   });

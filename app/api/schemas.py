@@ -8,6 +8,7 @@ class DraftReviewAction(BaseModel):
     reviewer: str | None = None
     edited_text: str | None = None
     auto_queue: bool = True
+    scheduled_for: datetime | None = None
 
 
 class DraftRejectAction(BaseModel):

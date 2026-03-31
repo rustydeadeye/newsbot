@@ -272,6 +272,8 @@ def queue_publish_jobs(db: Session) -> int:
 
 def publish_ready_jobs(db: Session) -> int:
     job_repo = PublishJobRepository(db)
+    creator_settings = CreatorSettingsRepository(db).get_or_create_default()
+    customer_repo = CustomerProfileRepository(db)
 
     # Release any jobs stuck in "publishing" (e.g. from a crashed worker)
     stuck = job_repo.find_stuck_publishing()
@@ -281,21 +283,6 @@ def publish_ready_jobs(db: Session) -> int:
         logger.error("job_id=%s stuck in publishing; marking failed", job.id)
     if stuck:
         db.commit()
-
-    # Load live tokens from DB so refreshes survive process restarts
-    creator_settings = CreatorSettingsRepository(db).get_or_create_default()
-    token_store = creator_settings.token_store or {}
-
-    def _save_tokens(access_token: str, refresh_token: str) -> None:
-        creator_settings.token_store = {
-            **creator_settings.token_store,
-            "x_access_token": access_token,
-            "x_refresh_token": refresh_token,
-        }
-        db.flush()
-        logger.info("Refreshed X tokens persisted to DB")
-
-    publisher = XPublisher(token_store=token_store, on_token_refresh=_save_tokens)
     published = 0
     jobs = job_repo.claim_ready()
     db.commit()
@@ -307,6 +294,36 @@ def publish_ready_jobs(db: Session) -> int:
             job.last_error = "missing_draft"
             logger.error("job_id=%s has no associated draft", job.id)
             continue
+
+        token_store: dict = {}
+
+        def _save_tokens(access_token: str, refresh_token: str) -> None:
+            nonlocal token_store
+            if draft.workspace_user_id:
+                profile = customer_repo.get_or_create_for_workspace_user(draft.workspace_user_id)
+                profile.token_store = {
+                    **(profile.token_store or {}),
+                    "x_access_token": access_token,
+                    "x_refresh_token": refresh_token,
+                }
+                token_store = profile.token_store
+            else:
+                creator_settings.token_store = {
+                    **creator_settings.token_store,
+                    "x_access_token": access_token,
+                    "x_refresh_token": refresh_token,
+                }
+                token_store = creator_settings.token_store
+            db.flush()
+            logger.info("Refreshed X tokens persisted to DB")
+
+        if draft.workspace_user_id:
+            profile = customer_repo.get_by_workspace_user_id(draft.workspace_user_id)
+            token_store = dict((profile.token_store or {}) if profile else {})
+        else:
+            token_store = dict(creator_settings.token_store or {})
+
+        publisher = XPublisher(token_store=token_store, on_token_refresh=_save_tokens)
         try:
             response = publisher.publish(draft.draft_text, idempotency_key=job.idempotency_key)
             result_status = response.get("status")

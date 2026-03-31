@@ -173,9 +173,42 @@ def test_publish_logs_endpoint_returns_logs() -> None:
 
 
 def test_customer_cannot_access_publish_jobs() -> None:
-    client, _db = _build_client(role="customer")
+    client, db = _build_client(role="customer")
+    event = Event(
+        event_type="earnings",
+        entity_type="company",
+        entity_name="TCS",
+        ticker="TCS",
+        source_priority=95,
+        occurred_at=datetime.now(timezone.utc),
+        summary_facts={"headline": "TCS Results"},
+        importance_score=90,
+        confidence_score=0.95,
+        dedupe_key="earnings|tcs|2026-03-28|na",
+        status="drafted",
+    )
+    own_draft = DraftPost(event=event, workspace_user_id=1, draft_text="Own draft", status="queued", needs_review=False)
+    other_draft = DraftPost(event=event, workspace_user_id=2, draft_text="Other draft", status="queued", needs_review=False)
+    db.add_all([event, own_draft, other_draft])
+    db.flush()
+    db.add_all([
+        PublishJob(draft_post_id=own_draft.id, status="queued"),
+        PublishJob(draft_post_id=other_draft.id, status="queued"),
+    ])
+    db.commit()
 
     response = client.get("/publish-jobs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["draft"]["draft_text"] == "Own draft"
+
+
+def test_customer_cannot_access_publish_logs() -> None:
+    client, _db = _build_client(role="customer")
+
+    response = client.get("/publish-jobs/logs")
 
     assert response.status_code == 403
 

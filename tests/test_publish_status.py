@@ -42,7 +42,7 @@ def test_publish_ready_jobs_marks_skipped(monkeypatch) -> None:
         id=1, draft_post_id=1, status="publishing", result_message=None,
         last_error=None, attempt_count=0, idempotency_key="test-key-1",
     )
-    draft = SimpleNamespace(draft_text="Hello")
+    draft = SimpleNamespace(draft_text="Hello", workspace_user_id=None)
     db = _FakeDB(job, draft)
 
     monkeypatch.setattr("app.pipeline.PublishJobRepository", lambda db_arg: _FakeRepo(job))
@@ -66,7 +66,7 @@ def test_publish_ready_jobs_marks_posted_and_logs(monkeypatch) -> None:
         id=1, draft_post_id=1, status="publishing", result_message=None,
         last_error=None, attempt_count=0, idempotency_key="test-key-2",
     )
-    draft = SimpleNamespace(draft_text="Hello", status="queued", event_id=10)
+    draft = SimpleNamespace(draft_text="Hello", status="queued", event_id=10, workspace_user_id=None)
     event = SimpleNamespace(status="drafted")
 
     class _PostedDB(_FakeDB):
@@ -103,7 +103,7 @@ def test_publish_ready_jobs_handles_rate_limit(monkeypatch) -> None:
         last_error=None, attempt_count=0, idempotency_key="test-key-3",
         scheduled_for=None,
     )
-    draft = SimpleNamespace(draft_text="Hello", status="queued", event_id=10)
+    draft = SimpleNamespace(draft_text="Hello", status="queued", event_id=10, workspace_user_id=None)
     db = _FakeDB(job, draft)
 
     monkeypatch.setattr("app.pipeline.PublishJobRepository", lambda db_arg: _FakeRepo(job))
@@ -131,7 +131,7 @@ def test_publish_ready_jobs_releases_stuck_jobs(monkeypatch) -> None:
         id=1, draft_post_id=1, status="publishing", result_message=None,
         last_error=None, attempt_count=0, idempotency_key="test-key-4",
     )
-    draft = SimpleNamespace(draft_text="Hello", status="queued", event_id=10)
+    draft = SimpleNamespace(draft_text="Hello", status="queued", event_id=10, workspace_user_id=None)
     db = _FakeDB(live_job, draft)
 
     class _RepoWithStuck(_FakeRepo):

@@ -13,7 +13,8 @@ import { PipelineRunButton } from "@/components/pipeline-run-button";
 import { QueueReviewRow } from "@/components/queue-review-row";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
-import { getCurrentPipelineRun, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
+import { getApprovedDrafts, getCreatorSettings, getCurrentPipelineRun, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
+import { formatPublishTime } from "@/lib/publish-plan";
 import { CustomerWorkspaceState, PipelineRun, ReviewItem } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
@@ -153,8 +154,15 @@ export default async function HomePage() {
 
   let queue;
   let currentRun = null;
+  let customerSettings = null;
+  let approvedDrafts = [];
   try {
-    [queue, currentRun] = await Promise.all([getReviewQueue(accessToken), getCurrentPipelineRun(accessToken)]);
+    [queue, currentRun, customerSettings, approvedDrafts] = await Promise.all([
+      getReviewQueue(accessToken),
+      getCurrentPipelineRun(accessToken),
+      getCreatorSettings(accessToken),
+      getApprovedDrafts(accessToken),
+    ]);
   } catch (error) {
     return (
       <div className="page-grid">
@@ -179,6 +187,11 @@ export default async function HomePage() {
   const highPriority = queue.filter((item: ReviewItem) => (item.event?.importance_score ?? 0) >= 80).length;
   const ready = queue.filter((item: ReviewItem) => Boolean(item.draft?.draft_text)).length;
   const showCustomerMetrics = state === "generation_ready";
+  const nextScheduledDraft = approvedDrafts.find((draft) => draft.publish_job?.scheduled_for);
+  const postedCount = approvedDrafts.filter((draft) => draft.status === "posted").length;
+  const queuedCount = approvedDrafts.filter((draft) => draft.status === "queued").length;
+  const publishingCount = approvedDrafts.filter((draft) => draft.status === "publishing").length;
+  const failedCount = approvedDrafts.filter((draft) => draft.status === "failed").length;
 
   return (
     <div className="page-grid">
@@ -234,7 +247,14 @@ export default async function HomePage() {
       {state === "generation_ready" ? (
         <div className="customer-home-grid">
           <div className="customer-home-main">
-            {leadItem ? <LeadReviewCard item={leadItem} role={role} /> : null}
+            {leadItem ? (
+              <LeadReviewCard
+                item={leadItem}
+                role={role}
+                canPublish={Boolean(customerSettings?.x_connected)}
+                publishSettings={customerSettings}
+              />
+            ) : null}
           </div>
           <GuidePanel
             eyebrow="How this works"
@@ -257,6 +277,38 @@ export default async function HomePage() {
             </div>
           </GuidePanel>
         </div>
+      ) : null}
+      {state === "generation_ready" && approvedDrafts.length > 0 ? (
+        <StatusPanel
+          eyebrow="Publishing activity"
+          title={
+            failedCount > 0
+              ? "Some approved drafts need attention"
+              : publishingCount > 0
+                ? "A draft is publishing right now"
+                : nextScheduledDraft?.publish_job?.scheduled_for
+              ? `Next post: ${formatPublishTime(nextScheduledDraft.publish_job.scheduled_for, customerSettings?.timezone ?? "Asia/Kolkata")}`
+              : queuedCount > 0
+                ? "Approved drafts are queued for publishing"
+                : postedCount > 0
+                  ? "Your recent approved drafts have already posted"
+                  : "Approved drafts are waiting for your next publishing step"
+          }
+          description={
+            failedCount > 0
+              ? `${failedCount} approved draft${failedCount === 1 ? "" : "s"} hit a delivery issue. Open Drafts to review what needs to be retried or adjusted.`
+              : publishingCount > 0
+                ? `${publishingCount} draft${publishingCount === 1 ? "" : "s"} ${publishingCount === 1 ? "is" : "are"} actively moving through publishing right now.`
+              : nextScheduledDraft?.publish_job?.scheduled_for
+              ? `Newsbot will send your next approved draft at the scheduled time. You can review the full list in Drafts.`
+              : queuedCount > 0
+                ? `${queuedCount} approved draft${queuedCount === 1 ? "" : "s"} ${queuedCount === 1 ? "is" : "are"} in the publishing queue right now.`
+                : postedCount > 0
+                  ? `${postedCount} draft${postedCount === 1 ? "" : "s"} already made it through publishing.`
+                  : "Approved drafts stay visible in Drafts until you decide when they should move forward."
+          }
+          tone={failedCount > 0 ? "danger" : publishingCount > 0 ? "warning" : "default"}
+        />
       ) : null}
       {state === "generation_ready" && secondaryItems.length > 0 ? (
         <div className="panel">

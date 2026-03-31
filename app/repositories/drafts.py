@@ -69,3 +69,15 @@ class DraftRepository:
             .limit(limit)
         )
         return list(self.db.scalars(stmt))
+
+    def list_customer_post_approval_for_workspace_user(self, workspace_user_id: int, limit: int = 50) -> list[DraftPost]:
+        stmt = (
+            select(DraftPost)
+            .where(
+                DraftPost.workspace_user_id == workspace_user_id,
+                DraftPost.status.in_(("approved", "queued", "publishing", "posted", "failed")),
+            )
+            .order_by(DraftPost.updated_at.desc())
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt))
