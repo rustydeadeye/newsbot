@@ -40,12 +40,16 @@ class ViewerContext:
         }
 
 
-def _verify_token_with_supabase(token: str, supabase_url: str) -> dict[str, Any]:
+def _verify_token_with_supabase(token: str, supabase_url: str, anon_key: str) -> dict[str, Any]:
     """Validate the JWT by calling Supabase's own /auth/v1/user endpoint.
     This is always correct regardless of how the JWT secret is configured."""
     url = f"{supabase_url.rstrip('/')}/auth/v1/user"
     try:
-        response = httpx.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5.0)
+        response = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {token}", "apikey": anon_key},
+            timeout=5.0,
+        )
     except httpx.RequestError as exc:
         _log.error("Supabase auth request failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unreachable")
@@ -83,10 +87,10 @@ def get_current_viewer(
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
-    if not settings.supabase_url:
+    if not settings.supabase_url or not settings.supabase_publishable_key:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Supabase auth is not configured")
 
-    claims = _verify_token_with_supabase(credentials.credentials, settings.supabase_url)
+    claims = _verify_token_with_supabase(credentials.credentials, settings.supabase_url, settings.supabase_publishable_key)
 
     user_id = claims.get("sub")
     email = claims.get("email")
