@@ -5,19 +5,16 @@ import { updateSession } from "@/lib/supabase/middleware";
 const PUBLIC_PATHS = new Set(["/login", "/auth/callback"]);
 
 export async function middleware(request: NextRequest) {
-  const response = await updateSession(request);
+  const { response, isAuthenticated } = await updateSession(request);
   const path = request.nextUrl.pathname;
   const isPublicPath = PUBLIC_PATHS.has(path);
-  const hasSessionCookie = request.cookies
-    .getAll()
-    .some((cookie) => cookie.name.startsWith("sb-") && cookie.value.length > 0);
 
-  if (!hasSessionCookie && !isPublicPath) {
+  if (!isAuthenticated && !isPublicPath) {
     const loginUrl = new URL("/login", request.url);
     return NextResponse.redirect(loginUrl);
   }
 
-  if (hasSessionCookie && isPublicPath) {
+  if (isAuthenticated && path === "/login") {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
