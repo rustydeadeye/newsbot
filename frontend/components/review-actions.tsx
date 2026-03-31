@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 
 import { approveDraft, rejectDraft } from "@/lib/api";
 import { formatPublishTime, getRecommendedPublishPlan } from "@/lib/publish-plan";
@@ -25,13 +24,13 @@ export function ReviewActions({
   canPublish?: boolean;
   publishSettings?: CreatorSettings | null;
 }) {
-  const router = useRouter();
   const [text, setText] = useState(initialText);
   const [reason, setReason] = useState("Needs rewrite");
   const [message, setMessage] = useState<string | null>(null);
   const [scheduleLater, setScheduleLater] = useState(false);
   const [scheduledFor, setScheduledFor] = useState("");
   const [lastAction, setLastAction] = useState<"approved" | "rejected" | null>(null);
+  const [resolvedStatus, setResolvedStatus] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const recommendedPlan = getRecommendedPublishPlan(publishSettings);
 
@@ -58,13 +57,17 @@ export function ReviewActions({
         });
         if (result.warning === "x_account_not_connected") {
           setMessage("Draft approved. Connect your X account in Settings when you are ready to schedule publishing.");
+        } else if (result.draft.status === "posted") {
+          setMessage("Approved and posted to X.");
+        } else if (result.draft.status === "publishing") {
+          setMessage("Approved and sent to publishing. Newsbot is posting it now.");
         } else if (result.publish_job?.scheduled_for) {
           setMessage(`Approved and scheduled for ${formatPublishTime(result.publish_job.scheduled_for, publishSettings?.timezone ?? "Asia/Kolkata")}.`);
         } else {
           setMessage(result.queued ? "Approved and queued for immediate publishing." : "Approved and left unqueued.");
         }
         setLastAction("approved");
-        router.refresh();
+        setResolvedStatus(result.draft.status);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Approve failed");
       }
@@ -77,7 +80,7 @@ export function ReviewActions({
         await rejectDraft(draftId, { reason });
         setMessage("Draft rejected.");
         setLastAction("rejected");
-        router.refresh();
+        setResolvedStatus("rejected");
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Reject failed");
       }
@@ -89,6 +92,34 @@ export function ReviewActions({
   const charRemaining = charLimit - charCount;
   const isOverLimit = charRemaining < 0;
   const charTone = isOverLimit ? "over" : charRemaining < 20 ? "danger" : charRemaining < 50 ? "warn" : "ok";
+  const isResolved = lastAction !== null;
+
+  if (isResolved) {
+    return (
+      <div className={compact ? "stack compact-actions" : "stack"}>
+        <div className="publish-plan-card">
+          <div className="section-label">{lastAction === "approved" ? "Draft moved forward" : "Draft removed from review"}</div>
+          <div className="publish-plan-title">
+            {lastAction === "approved"
+              ? resolvedStatus === "posted"
+                ? "Posted successfully"
+                : resolvedStatus === "publishing"
+                  ? "Publishing now"
+                  : resolvedStatus === "queued"
+                    ? "Queued for publishing"
+                    : "Saved as approved"
+              : "Rejected and removed from the live queue"}
+          </div>
+          <div className="card-subtle">
+            {message ??
+              (lastAction === "approved"
+                ? "This draft has moved out of the live review queue. Refresh the workspace when you want to load the next state."
+                : "This draft has been removed from the live review queue. Refresh the workspace when you want to load the next state.")}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={compact ? "stack compact-actions" : "stack"}>

@@ -8,7 +8,7 @@ from app.api.security import ViewerContext, get_current_viewer
 from app.db.session import get_db
 from app.models.job import PublishJob
 from app.models.review import ReviewQueueItem
-from app.pipeline import enqueue_approved_draft
+from app.pipeline import enqueue_approved_draft, publish_job_now
 from app.repositories.creators import CreatorSettingsRepository
 from app.repositories.customers import CustomerProfileRepository
 from app.repositories.drafts import DraftRepository
@@ -193,6 +193,10 @@ def approve_draft(
             queued = True
 
     db.commit()
+    if viewer.is_customer and queued and publish_job and publish_job.scheduled_for is None:
+        publish_job_now(db, publish_job.id)
+        draft = draft_repo.get(draft_id) or draft
+        publish_job = job_repo.latest_for_draft(draft.id)
     result = {"draft": _serialize_draft(draft, job_repo), "queued": queued}
     if publish_job:
         result["publish_job"] = publish_job.to_dict()

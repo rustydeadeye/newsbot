@@ -283,9 +283,39 @@ def publish_ready_jobs(db: Session) -> int:
         logger.error("job_id=%s stuck in publishing; marking failed", job.id)
     if stuck:
         db.commit()
-    published = 0
     jobs = job_repo.claim_ready()
     db.commit()
+
+    published = _process_claimed_jobs(db, jobs, creator_settings, customer_repo)
+    logger.info("publish_ready_jobs published=%d", published)
+    return published
+
+
+def publish_job_now(db: Session, job_id: int) -> bool:
+    job_repo = PublishJobRepository(db)
+    creator_settings = CreatorSettingsRepository(db).get_or_create_default()
+    customer_repo = CustomerProfileRepository(db)
+    job = job_repo.get(job_id)
+    if job is None:
+        return False
+    if job.status != "queued":
+        return job.status == "posted"
+    if job.scheduled_for and job.scheduled_for > datetime.now(timezone.utc):
+        return False
+
+    job.status = "publishing"
+    db.flush()
+    published = _process_claimed_jobs(db, [job], creator_settings, customer_repo)
+    return published > 0
+
+
+def _process_claimed_jobs(
+    db: Session,
+    jobs: list[PublishJob],
+    creator_settings: CreatorSettings,
+    customer_repo: CustomerProfileRepository,
+) -> int:
+    published = 0
 
     for job in jobs:
         draft = db.get(DraftPost, job.draft_post_id)
@@ -372,7 +402,6 @@ def publish_ready_jobs(db: Session) -> int:
                 logger.error("job_id=%s publish failed permanently after %d attempts: %s", job.id, job.attempt_count, exc)
 
     db.commit()
-    logger.info("publish_ready_jobs published=%d", published)
     return published
 
 
