@@ -1,3 +1,4 @@
+import base64
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,13 +41,18 @@ class ViewerContext:
 
 def _decode_supabase_jwt(token: str, settings: Settings) -> dict[str, Any]:
     if settings.supabase_jwt_secret:
-        return jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-            issuer=f"{settings.supabase_url.rstrip('/')}/auth/v1" if settings.supabase_url else None,
-        )
+        # Supabase dashboard shows the JWT secret as a base64-encoded string.
+        # Try decoded bytes first (correct), fall back to raw string.
+        try:
+            secret: str | bytes = base64.b64decode(settings.supabase_jwt_secret)
+        except Exception:
+            secret = settings.supabase_jwt_secret
+        issuer = f"{settings.supabase_url.rstrip('/')}/auth/v1" if settings.supabase_url else None
+        try:
+            return jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated", issuer=issuer)
+        except jwt.PyJWTError:
+            # Fall back to raw string in case the secret is not base64-encoded
+            return jwt.decode(token, settings.supabase_jwt_secret, algorithms=["HS256"], audience="authenticated", issuer=issuer)
 
     if not settings.supabase_jwks_url or not settings.supabase_url:
         raise HTTPException(
