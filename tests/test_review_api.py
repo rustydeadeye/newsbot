@@ -31,7 +31,7 @@ def _build_client(role: str = "admin") -> tuple[TestClient, Session]:
         yield session
 
     def override_get_current_viewer():
-        return ViewerContext(user_id="user-1", email=f"{role}@example.com", role=role, display_name=role.title())
+        return ViewerContext(workspace_user_id=1, user_id="user-1", email=f"{role}@example.com", role=role, display_name=role.title())
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_viewer] = override_get_current_viewer
@@ -53,8 +53,8 @@ def test_list_review_queue_includes_event_and_draft() -> None:
         dedupe_key="earnings|tcs|2026-03-28|na",
         status="drafted",
     )
-    draft = DraftPost(event=event, draft_text="TCS results draft", status="draft", needs_review=True)
-    item = ReviewQueueItem(event=event, reason="manual_review")
+    draft = DraftPost(event=event, workspace_user_id=1, draft_text="TCS results draft", status="draft", needs_review=True)
+    item = ReviewQueueItem(event=event, workspace_user_id=1, reason="manual_review")
     db.add_all([event, draft, item])
     db.commit()
 
@@ -114,8 +114,8 @@ def test_customer_approve_draft_does_not_auto_queue() -> None:
         dedupe_key="earnings|tcs|2026-03-28|financial-results",
         status="drafted",
     )
-    draft = DraftPost(event=event, draft_text="Old text", status="draft", needs_review=True)
-    item = ReviewQueueItem(event=event, reason="manual_review")
+    draft = DraftPost(event=event, workspace_user_id=1, draft_text="Old text", status="draft", needs_review=True)
+    item = ReviewQueueItem(event=event, workspace_user_id=1, reason="manual_review")
     db.add_all([event, draft, item])
     db.commit()
 
@@ -145,8 +145,8 @@ def test_reject_draft_marks_rejected() -> None:
         dedupe_key="dividend|tvsmotor|2026-03-28|na",
         status="drafted",
     )
-    draft = DraftPost(event=event, draft_text="Dividend draft", status="draft", needs_review=True)
-    item = ReviewQueueItem(event=event, reason="manual_review")
+    draft = DraftPost(event=event, workspace_user_id=1, draft_text="Dividend draft", status="draft", needs_review=True)
+    item = ReviewQueueItem(event=event, workspace_user_id=1, reason="manual_review")
     db.add_all([event, draft, item])
     db.commit()
 
@@ -177,8 +177,8 @@ def test_customer_review_queue_hides_admin_event_fields() -> None:
         dedupe_key="dividend|tvsmotor|2026-03-28|na",
         status="drafted",
     )
-    draft = DraftPost(event=event, draft_text="Dividend draft", status="draft", needs_review=True)
-    item = ReviewQueueItem(event=event, reason="manual_review")
+    draft = DraftPost(event=event, workspace_user_id=1, draft_text="Dividend draft", status="draft", needs_review=True)
+    item = ReviewQueueItem(event=event, workspace_user_id=1, reason="manual_review")
     db.add_all([event, draft, item])
     db.commit()
 

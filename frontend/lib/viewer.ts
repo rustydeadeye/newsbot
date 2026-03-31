@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 
-import { getAuthMe } from "@/lib/api";
+import { getAuthMe, getOnboardingStatus } from "@/lib/api";
 import { ViewerProfile } from "@/lib/session";
+import { OnboardingStatus } from "@/lib/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export async function getServerViewer(): Promise<{ viewer: ViewerProfile; accessToken: string } | null> {
@@ -35,4 +36,17 @@ export async function requireServerViewer(): Promise<{ viewer: ViewerProfile; ac
     redirect("/login");
   }
   return viewer;
+}
+
+export async function requireWorkspaceSession(): Promise<{
+  viewer: ViewerProfile;
+  accessToken: string;
+  onboarding: OnboardingStatus | null;
+}> {
+  const auth = await requireServerViewer();
+  if (!auth.viewer.role || auth.viewer.role !== "customer") {
+    return { ...auth, onboarding: null };
+  }
+  const onboarding = await getOnboardingStatus(auth.accessToken);
+  return { ...auth, onboarding };
 }

@@ -14,6 +14,7 @@ class ReviewQueueItem(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
+    workspace_user_id: Mapped[int | None] = mapped_column(ForeignKey("workspace_users.id", ondelete="CASCADE"))
     reason: Mapped[str] = mapped_column(String(255))
     assigned_to: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(30), default="open")
@@ -25,6 +26,7 @@ class ReviewQueueItem(Base, TimestampMixin):
         return {
             "id": self.id,
             "event_id": self.event_id,
+            "workspace_user_id": self.workspace_user_id,
             "reason": self.reason,
             "assigned_to": self.assigned_to,
             "status": self.status,

@@ -40,6 +40,18 @@ class CreatorSettingsUpdate(BaseModel):
     openai_api_key: str | None = None
 
 
+class CustomerProfileUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1)
+    tone: str | None = None
+    language: str | None = None
+    watchlist: list[str] | None = None
+    blocked_phrases: list[str] | None = None
+
+
+class CustomerOpenAIUpdate(BaseModel):
+    openai_api_key: str = Field(min_length=10)
+
+
 class PublishJobRetryAction(BaseModel):
     scheduled_for: datetime | None = None
 

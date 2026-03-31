@@ -6,11 +6,27 @@ from app.api.security import ViewerContext, get_current_viewer
 from app.db.session import get_db
 from app.models.review import ReviewQueueItem
 from app.pipeline import enqueue_approved_draft
+from app.repositories.creators import CreatorSettingsRepository
+from app.repositories.customers import CustomerProfileRepository
 from app.repositories.drafts import DraftRepository
 from app.repositories.events import EventRepository
 from app.repositories.review import ReviewQueueRepository
 
 router = APIRouter()
+
+
+def _serialize_event(event, viewer: ViewerContext) -> dict | None:
+    if event is None:
+        return None
+    payload = event.to_dict()
+    if viewer.is_customer:
+        payload.pop("dedupe_key", None)
+        payload.pop("status", None)
+    return payload
+
+
+def _viewer_draft(draft_repo: DraftRepository, event_id: int, viewer: ViewerContext):
+    return draft_repo.latest_for_event(event_id, viewer.workspace_user_id if viewer.is_customer else None)
 
 
 @router.get("")
@@ -21,21 +37,12 @@ def list_review_queue(
     review_repo = ReviewQueueRepository(db)
     event_repo = EventRepository(db)
     draft_repo = DraftRepository(db)
+    items = review_repo.list_open_for_workspace_user(viewer.workspace_user_id) if viewer.is_customer else review_repo.list_open()
     payload: list[dict] = []
-    for item in review_repo.list_open():
+    for item in items:
         event = event_repo.get(item.event_id)
-        draft = draft_repo.latest_for_event(item.event_id)
-        event_payload = event.to_dict() if event else None
-        if event_payload and viewer.is_customer:
-            event_payload.pop("dedupe_key", None)
-            event_payload.pop("status", None)
-        payload.append(
-            {
-                **item.to_dict(),
-                "event": event_payload,
-                "draft": draft.to_dict() if draft else None,
-            }
-        )
+        draft = _viewer_draft(draft_repo, item.event_id, viewer)
+        payload.append({**item.to_dict(), "event": _serialize_event(event, viewer), "draft": draft.to_dict() if draft else None})
     return payload
 
 
@@ -47,21 +54,12 @@ def list_overdue_review_items(
     review_repo = ReviewQueueRepository(db)
     event_repo = EventRepository(db)
     draft_repo = DraftRepository(db)
+    items = review_repo.list_overdue_for_workspace_user(viewer.workspace_user_id) if viewer.is_customer else review_repo.list_overdue()
     payload: list[dict] = []
-    for item in review_repo.list_overdue():
+    for item in items:
         event = event_repo.get(item.event_id)
-        draft = draft_repo.latest_for_event(item.event_id)
-        event_payload = event.to_dict() if event else None
-        if event_payload and viewer.is_customer:
-            event_payload.pop("dedupe_key", None)
-            event_payload.pop("status", None)
-        payload.append(
-            {
-                **item.to_dict(),
-                "event": event_payload,
-                "draft": draft.to_dict() if draft else None,
-            }
-        )
+        draft = _viewer_draft(draft_repo, item.event_id, viewer)
+        payload.append({**item.to_dict(), "event": _serialize_event(event, viewer), "draft": draft.to_dict() if draft else None})
     return payload
 
 
@@ -72,15 +70,16 @@ def list_review_drafts(
 ) -> list[dict]:
     draft_repo = DraftRepository(db)
     event_repo = EventRepository(db)
-    drafts = []
-    for draft in draft_repo.list_needing_review():
+    drafts = (
+        draft_repo.list_needing_review_for_workspace_user(viewer.workspace_user_id)
+        if viewer.is_customer
+        else draft_repo.list_needing_review()
+    )
+    payload = []
+    for draft in drafts:
         event = event_repo.get(draft.event_id)
-        event_payload = event.to_dict() if event else None
-        if event_payload and viewer.is_customer:
-            event_payload.pop("dedupe_key", None)
-            event_payload.pop("status", None)
-        drafts.append({**draft.to_dict(), "event": event_payload})
-    return drafts
+        payload.append({**draft.to_dict(), "event": _serialize_event(event, viewer)})
+    return payload
 
 
 @router.post("/drafts/{draft_id}/approve")
@@ -93,7 +92,7 @@ def approve_draft(
     draft_repo = DraftRepository(db)
     review_repo = ReviewQueueRepository(db)
     draft = draft_repo.get(draft_id)
-    if draft is None:
+    if draft is None or (viewer.is_customer and draft.workspace_user_id != viewer.workspace_user_id):
         raise HTTPException(status_code=404, detail="Draft not found")
 
     if action.edited_text:
@@ -105,21 +104,26 @@ def approve_draft(
     draft.safety_flags = {**flags, "reviewed_by": reviewer}
 
     for item in review_repo.list_open_for_event(draft.event_id):
+        if viewer.is_customer and item.workspace_user_id != viewer.workspace_user_id:
+            continue
         item.status = "resolved"
         item.assigned_to = reviewer
 
     queued = False
     warning: str | None = None
     if action.auto_queue and viewer.is_admin:
-        from app.repositories.creators import CreatorSettingsRepository
         creator_settings = CreatorSettingsRepository(db).get_or_create_default()
-        if not (creator_settings.token_store or {}).get("x_access_token"):
+        if not creator_settings.to_dict().get("x_connected"):
             warning = "x_account_not_connected"
         else:
             queued = enqueue_approved_draft(db, draft.id)
+    elif action.auto_queue and viewer.is_customer:
+        profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(viewer.workspace_user_id)
+        if not profile.to_dict().get("x_connected"):
+            warning = "x_account_not_connected"
 
     db.commit()
-    result: dict = {"draft": draft.to_dict(), "queued": queued}
+    result = {"draft": draft.to_dict(), "queued": queued}
     if warning:
         result["warning"] = warning
     return result
@@ -135,7 +139,7 @@ def reject_draft(
     draft_repo = DraftRepository(db)
     review_repo = ReviewQueueRepository(db)
     draft = draft_repo.get(draft_id)
-    if draft is None:
+    if draft is None or (viewer.is_customer and draft.workspace_user_id != viewer.workspace_user_id):
         raise HTTPException(status_code=404, detail="Draft not found")
 
     reviewer = action.reviewer or viewer.actor_name
@@ -145,6 +149,8 @@ def reject_draft(
     draft.safety_flags = {**flags, "rejected_by": reviewer, "rejection_reason": action.reason}
 
     for item in review_repo.list_open_for_event(draft.event_id):
+        if viewer.is_customer and item.workspace_user_id != viewer.workspace_user_id:
+            continue
         item.status = "rejected"
         item.assigned_to = reviewer
 
@@ -159,15 +165,16 @@ def list_rejected_drafts(
 ) -> list[dict]:
     draft_repo = DraftRepository(db)
     event_repo = EventRepository(db)
-    drafts = []
-    for draft in draft_repo.list_rejected():
+    drafts = (
+        draft_repo.list_rejected_for_workspace_user(viewer.workspace_user_id)
+        if viewer.is_customer
+        else draft_repo.list_rejected()
+    )
+    payload = []
+    for draft in drafts:
         event = event_repo.get(draft.event_id)
-        event_payload = event.to_dict() if event else None
-        if event_payload and viewer.is_customer:
-            event_payload.pop("dedupe_key", None)
-            event_payload.pop("status", None)
-        drafts.append({**draft.to_dict(), "event": event_payload})
-    return drafts
+        payload.append({**draft.to_dict(), "event": _serialize_event(event, viewer)})
+    return payload
 
 
 @router.post("/drafts/{draft_id}/reopen")
@@ -179,7 +186,7 @@ def reopen_draft(
     draft_repo = DraftRepository(db)
     review_repo = ReviewQueueRepository(db)
     draft = draft_repo.get(draft_id)
-    if draft is None:
+    if draft is None or (viewer.is_customer and draft.workspace_user_id != viewer.workspace_user_id):
         raise HTTPException(status_code=404, detail="Draft not found")
     if draft.status != "rejected":
         raise HTTPException(status_code=409, detail="Only rejected drafts can be re-opened")
@@ -188,7 +195,13 @@ def reopen_draft(
     draft.needs_review = True
     flags = draft.safety_flags or {}
     draft.safety_flags = {**flags, "reopened_by": viewer.actor_name}
-    review_repo.add(ReviewQueueItem(event_id=draft.event_id, reason="manual_review"))
+    review_repo.add(
+        ReviewQueueItem(
+            event_id=draft.event_id,
+            workspace_user_id=draft.workspace_user_id,
+            reason="manual_review",
+        )
+    )
     db.commit()
     return draft.to_dict()
 
@@ -202,7 +215,7 @@ def resolve_review_item(
 ) -> dict:
     review_repo = ReviewQueueRepository(db)
     item = review_repo.get(review_id)
-    if item is None:
+    if item is None or (viewer.is_customer and item.workspace_user_id != viewer.workspace_user_id):
         raise HTTPException(status_code=404, detail="Review item not found")
 
     item.status = action.status

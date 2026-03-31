@@ -88,6 +88,35 @@ export type CreatorSettings = {
   openai_configured: boolean;
 };
 
+export type OnboardingStatus = {
+  id: number;
+  workspace_user_id: number;
+  display_name: string | null;
+  tone: string;
+  language: string;
+  watchlist: string[];
+  blocked_phrases: string[];
+  openai_configured: boolean;
+  x_connected: boolean;
+  onboarding_completed: boolean;
+  onboarding_completed_at: string | null;
+  publishing_ready: boolean;
+  required: boolean;
+  missing: string[];
+};
+
+export type PipelineRun = {
+  id: number;
+  workspace_user_id: number | null;
+  requested_by: string;
+  scope: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  result_counts: Record<string, number>;
+  error_message: string | null;
+};
+
 export type AuthMeResponse = {
   viewer: ViewerProfile;
 };

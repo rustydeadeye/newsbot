@@ -1,9 +1,9 @@
 from sqlalchemy import Integer, String
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+from app.models.types import JSON_VARIANT
 
 
 class CreatorSettings(Base, TimestampMixin):
@@ -15,10 +15,10 @@ class CreatorSettings(Base, TimestampMixin):
     tone: Mapped[str] = mapped_column(String(100), default="neutral")
     language: Mapped[str] = mapped_column(String(20), default="en")
     max_posts_per_hour: Mapped[int] = mapped_column(Integer, default=6)
-    watchlist: Mapped[list[str]] = mapped_column(JSONB, default=list)
-    blocked_phrases: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    watchlist: Mapped[list[str]] = mapped_column(JSON_VARIANT, default=list)
+    blocked_phrases: Mapped[list[str]] = mapped_column(JSON_VARIANT, default=list)
     # OAuth token persistence — stores {"x_access_token": "...", "x_refresh_token": "..."}
-    token_store: Mapped[dict] = mapped_column(JSONB, default=dict)
+    token_store: Mapped[dict] = mapped_column(JSON_VARIANT, default=dict)
     # Posting window — IST hour integers (0–23), None means no restriction
     timezone: Mapped[str] = mapped_column(String(50), default="Asia/Kolkata")
     posting_window_start: Mapped[int | None] = mapped_column(Integer)

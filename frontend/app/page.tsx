@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { ApiErrorPanel } from "@/components/api-error-panel";
 import { EmptyState } from "@/components/empty-state";
+import { GenerateDraftsButton } from "@/components/generate-drafts-button";
 import { GuidePanel } from "@/components/guide-panel";
 import { KpiCard } from "@/components/kpi-card";
 import { LeadReviewCard } from "@/components/lead-review-card";
@@ -9,15 +11,19 @@ import { PipelineRunButton } from "@/components/pipeline-run-button";
 import { QueueReviewRow } from "@/components/queue-review-row";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
-import { getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
+import { getCurrentPipelineRun, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
 import { ReviewItem } from "@/lib/types";
-import { requireServerViewer } from "@/lib/viewer";
+import { requireWorkspaceSession } from "@/lib/viewer";
 
 export const revalidate = 30;
 
 export default async function HomePage() {
-  const { viewer, accessToken } = await requireServerViewer();
+  const { viewer, accessToken, onboarding } = await requireWorkspaceSession();
   const role = viewer.role;
+
+  if (role === "customer" && onboarding && !onboarding.onboarding_completed) {
+    redirect("/onboarding");
+  }
 
   if (role === "admin") {
     let queue;
@@ -27,7 +33,7 @@ export default async function HomePage() {
       [queue, jobs, sources] = await Promise.all([
         getReviewQueue(accessToken),
         getPublishJobs(accessToken),
-        getSources(accessToken)
+        getSources(accessToken),
       ]);
     } catch (error) {
       return (
@@ -51,8 +57,6 @@ export default async function HomePage() {
     const blocked = queue.filter((item) => item.reason.includes("guardrail")).length;
     const disabledSources = sources.filter((source) => !source.enabled).length;
     const topFailure = jobs.find((job) => job.status === "failed");
-
-    // Sort: overdue first, then by importance score descending
     const sortedQueue = [...queue].sort((a: ReviewItem, b: ReviewItem) => {
       if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
       return (b.event?.importance_score ?? 0) - (a.event?.importance_score ?? 0);
@@ -61,96 +65,61 @@ export default async function HomePage() {
     return (
       <div className="page-grid">
         <ShellHeader
-          eyebrow="Admin Command Center"
           title="Operations Home"
-          description="Keep the pipeline healthy, spot delivery issues early, and jump straight to the work that needs intervention."
+          description="Verify system health, queue pressure, and publishing readiness."
           viewer={viewer}
-          freshnessLabel="Publishing, source, and review status"
-          actions={
-            <>
-              <PipelineRunButton />
-              <Link className="button" href="/jobs">
-                Open Publishing
-              </Link>
-              <Link className="button secondary" href="/settings">
-                Review Settings
-              </Link>
-            </>
-          }
+          freshnessLabel="Role-aware control center"
         />
         <div className="metrics">
-          <KpiCard label="Open Review" value={queue.length} detail="Items waiting for a human decision" />
-          <KpiCard label="Publishing Queue" value={queued} detail="Queued or in flight" tone={queued > 0 ? "warning" : "calm"} />
-          <KpiCard label="Failures" value={failed} detail="Delivery errors that need intervention" tone={failed > 0 ? "danger" : "calm"} />
-          <KpiCard label="Disabled Sources" value={disabledSources} detail="Coverage gaps affecting ingestion" tone={disabledSources > 0 ? "warning" : "calm"} />
+          <KpiCard label="Pending Review" value={queue.length} detail="Open review items" tone={queue.length > 0 ? "warning" : "calm"} />
+          <KpiCard label="Publish Failures" value={failed} detail="Delivery issues to resolve" tone={failed > 0 ? "danger" : "calm"} />
+          <KpiCard label="Blocked Items" value={blocked} detail="Guardrail pressure" tone={blocked > 0 ? "warning" : "calm"} />
+          <KpiCard label="Disabled Sources" value={disabledSources} detail="Coverage gaps" tone={disabledSources > 0 ? "danger" : "calm"} />
         </div>
-        <div className="command-center-grid">
-          <StatusPanel
-            eyebrow="Priority one"
-            title={failed > 0 ? "Publishing failure needs intervention" : "Delivery is stable"}
-            description={
-              failed > 0
-                ? `Start with the publish failure impacting output${topFailure?.event?.ticker ? ` for ${topFailure.event.ticker}` : ""}. Delivery issues rank above source and review backlog.`
-                : "No active publish failures are blocking output right now. You can move on to source readiness and review pressure."
-            }
-            tone={failed > 0 ? "danger" : "default"}
-          >
-            {topFailure ? (
-              <div className="workspace-list">
-                <div className="workspace-list-row">
-                  <span>{String(topFailure.event?.summary_facts?.headline ?? topFailure.draft?.draft_text ?? "Unknown failed job")}</span>
-                  <strong>{topFailure.last_error ?? "See publishing details"}</strong>
-                </div>
-              </div>
-            ) : null}
-          </StatusPanel>
-          <StatusPanel
-            eyebrow="Secondary priority"
-            title={disabledSources > 0 ? "Source coverage needs attention" : "Source coverage is healthy"}
-            description={
-              disabledSources > 0
-                ? `${disabledSources} source${disabledSources === 1 ? " is" : "s are"} disabled. Fix coverage next so the queue stays trustworthy.`
-                : "All configured sources are enabled. Review backlog is your next operational signal."
-            }
-            tone={disabledSources > 0 ? "warning" : "default"}
-          />
+        <StatusPanel
+          eyebrow="Top priority"
+          title={topFailure ? "Resolve publishing failures first" : "System flow is currently stable"}
+          description={
+            topFailure
+              ? `Latest failure: ${topFailure.last_error ?? topFailure.result_message ?? "Unknown delivery error"}`
+              : "No delivery failures are currently blocking output. Use the command center below to monitor queue and source readiness."
+          }
+          tone={topFailure ? "danger" : "default"}
+        />
+        <div className="row">
+          <PipelineRunButton />
+          <Link className="button secondary" href="/jobs">
+            Open Publishing
+          </Link>
         </div>
-        <div className="card-grid admin-secondary-grid">
+        {sortedQueue.length > 0 ? (
           <div className="panel">
-            <div className="section-title">Review pressure</div>
+            <div className="section-title">Needs intervention</div>
             <div className="queue-list">
-              <div className="card-subtle">
-                {queue.length > 0
-                  ? `${blocked} guardrail hold${blocked === 1 ? "" : "s"} and ${queue.length - blocked} standard review item${queue.length - blocked === 1 ? "" : "s"} are waiting.`
-                  : "No review backlog is building right now."}
-              </div>
-              {sortedQueue.slice(0, 4).map((item) => (
+              {sortedQueue.slice(0, 6).map((item) => (
                 <QueueReviewRow key={item.id} item={item} />
               ))}
             </div>
           </div>
-          <GuidePanel
-            eyebrow="Fast actions"
-            title="Move quickly without losing context"
-            description="Use Publishing for delivery failures, Drafts for deliberate copy fixes, and Settings for source readiness or ownership changes."
-          >
-            <div className="inline-actions">
-              <Link className="button" href="/drafts">
-                Open Drafts
-              </Link>
+        ) : (
+          <EmptyState
+            title="No urgent intervention items"
+            description="Review backlog, source controls, and delivery failures are all currently clear."
+            action={
               <Link className="button secondary" href="/events">
-                View Events
+                Review recent events
               </Link>
-            </div>
-          </GuidePanel>
-        </div>
+            }
+          />
+        )}
       </div>
     );
   }
 
   let queue;
+  let currentRun = null;
   try {
-    queue = await getReviewQueue(accessToken);
+    [queue, currentRun] = await Promise.all([getReviewQueue(accessToken), getCurrentPipelineRun(accessToken)]);
   } catch (error) {
     return (
       <div className="page-grid">
@@ -167,33 +136,20 @@ export default async function HomePage() {
       </div>
     );
   }
-  const highPriority = queue.filter((item) => (item.event?.importance_score ?? 0) >= 85).length;
-  const blocked = queue.filter((item) => item.reason.includes("guardrail")).length;
-  const ready = queue.filter((item) => item.draft).length;
 
-  // Sort: overdue first, then by importance score descending
-  const sortedCustomerQueue = [...queue].sort((a: ReviewItem, b: ReviewItem) => {
-    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
-    return (b.event?.importance_score ?? 0) - (a.event?.importance_score ?? 0);
-  });
-  const leadItem = sortedCustomerQueue[0] ?? null;
-  const secondaryItems = sortedCustomerQueue.slice(1, 5);
-  const pageTitle = queue.length > 0 ? `(${queue.length}) Newsbot` : "Newsbot";
+  const leadItem = queue[0] ?? null;
+  const secondaryItems = queue.slice(1, 6);
+  const highPriority = queue.filter((item: ReviewItem) => (item.event?.importance_score ?? 0) >= 80).length;
+  const blocked = queue.filter((item: ReviewItem) => item.reason.includes("blocked") || item.reason.includes("guardrail")).length;
+  const ready = queue.filter((item: ReviewItem) => Boolean(item.draft?.draft_text)).length;
 
   return (
     <div className="page-grid">
-      <title>{pageTitle}</title>
       <ShellHeader
-        eyebrow="Customer Review Workspace"
         title="Home"
-        description="Start with the next item that needs your decision, then review the draft and approve or reject with confidence."
+        description="Review what Newsbot found and decide what should move forward."
         viewer={viewer}
         freshnessLabel="Decision-first workspace"
-        actions={
-          <Link className="button secondary" href="/drafts">
-            Open Drafts
-          </Link>
-        }
       />
       <div className="metrics">
         <KpiCard label="Needs Review" value={queue.length} detail="Items waiting for your decision" />
@@ -201,15 +157,35 @@ export default async function HomePage() {
         <KpiCard label="Needs Attention" value={blocked} detail="Guardrail-triggered review" tone={blocked > 0 ? "warning" : "calm"} />
         <KpiCard label="Drafts Ready" value={ready} detail="Items with usable draft text" />
       </div>
+      {currentRun ? (
+        <StatusPanel
+          eyebrow="Generation status"
+          title={
+            currentRun.status === "running" || currentRun.status === "queued"
+              ? "Draft generation is in progress"
+              : currentRun.status === "empty"
+                ? "No matching events found"
+                : currentRun.status === "failed"
+                  ? "Draft generation needs attention"
+                  : "Latest generation complete"
+          }
+          description={
+            currentRun.status === "running" || currentRun.status === "queued"
+              ? "Newsbot is preparing customer-specific drafts from the latest available events."
+              : currentRun.status === "empty"
+                ? "No recent events matched your current profile or watchlist. Update your settings or try again later."
+                : currentRun.status === "failed"
+                  ? (currentRun.error_message ?? "The latest generation run failed unexpectedly.")
+                  : `Latest run created ${currentRun.result_counts.drafted ?? 0} drafts for review.`
+          }
+          tone={currentRun.status === "failed" ? "danger" : currentRun.status === "empty" ? "warning" : "default"}
+        />
+      ) : null}
       {queue.length === 0 ? (
         <EmptyState
-          title="Nothing needs review right now"
-          description="Newsbot is still monitoring your sources. When a draft needs a decision, it will appear here with the event context and next action."
-          action={
-            <Link className="button secondary" href="/events">
-              View recent events
-            </Link>
-          }
+          title="No drafts need review yet"
+          description="Generate customer-specific drafts from the latest available events. When a draft needs a decision, it will appear here with the event context and next action."
+          action={<GenerateDraftsButton />}
         />
       ) : (
         <div className="customer-home-grid">

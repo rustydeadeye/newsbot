@@ -1,12 +1,24 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
+async function waitForSession() {
+  const supabase = getSupabaseBrowserClient();
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const {
+      data: { session }
+    } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      return session;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+  }
+  return null;
+}
+
 export function AuthForm() {
-  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
@@ -22,8 +34,8 @@ export function AuthForm() {
           if (error) {
             throw error;
           }
-          router.push("/");
-          router.refresh();
+          await waitForSession();
+          window.location.assign("/");
           return;
         }
 

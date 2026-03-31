@@ -14,10 +14,27 @@ class ReviewQueueRepository:
         stmt: Select[tuple[ReviewQueueItem]] = select(ReviewQueueItem).where(ReviewQueueItem.status == "open")
         return list(self.db.scalars(stmt))
 
+    def list_open_for_workspace_user(self, workspace_user_id: int) -> list[ReviewQueueItem]:
+        stmt: Select[tuple[ReviewQueueItem]] = select(ReviewQueueItem).where(
+            ReviewQueueItem.status == "open",
+            ReviewQueueItem.workspace_user_id == workspace_user_id,
+        )
+        return list(self.db.scalars(stmt))
+
     def list_overdue(self) -> list[ReviewQueueItem]:
         now = datetime.now(timezone.utc)
         stmt = select(ReviewQueueItem).where(
             ReviewQueueItem.status == "open",
+            ReviewQueueItem.sla_due_at.is_not(None),
+            ReviewQueueItem.sla_due_at < now,
+        )
+        return list(self.db.scalars(stmt))
+
+    def list_overdue_for_workspace_user(self, workspace_user_id: int) -> list[ReviewQueueItem]:
+        now = datetime.now(timezone.utc)
+        stmt = select(ReviewQueueItem).where(
+            ReviewQueueItem.status == "open",
+            ReviewQueueItem.workspace_user_id == workspace_user_id,
             ReviewQueueItem.sla_due_at.is_not(None),
             ReviewQueueItem.sla_due_at < now,
         )

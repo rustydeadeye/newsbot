@@ -18,6 +18,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 @dataclass(frozen=True)
 class ViewerContext:
+    workspace_user_id: int
     user_id: str
     email: str
     role: str
@@ -31,8 +32,13 @@ class ViewerContext:
     def is_customer(self) -> bool:
         return self.role == "customer"
 
+    @property
+    def actor_name(self) -> str:
+        return self.display_name or self.email
+
     def to_dict(self) -> dict[str, str | None]:
         return {
+            "workspace_user_id": self.workspace_user_id,
             "user_id": self.user_id,
             "email": self.email,
             "role": self.role,
@@ -119,6 +125,7 @@ def get_current_viewer(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Workspace access disabled")
 
     return ViewerContext(
+        workspace_user_id=workspace_user.id,
         user_id=workspace_user.auth_user_id,
         email=workspace_user.email,
         role=workspace_user.role,

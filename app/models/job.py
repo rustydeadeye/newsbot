@@ -2,11 +2,11 @@ from datetime import datetime
 import uuid
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+from app.models.types import JSON_VARIANT
 
 
 class PublishJob(Base, TimestampMixin):
@@ -42,8 +42,8 @@ class PublishLog(Base, TimestampMixin):
     publish_job_id: Mapped[int] = mapped_column(ForeignKey("publish_jobs.id", ondelete="CASCADE"))
     platform_post_id: Mapped[str | None] = mapped_column(String(255))
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    response_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
-    engagement_stats: Mapped[dict] = mapped_column(JSONB, default=dict)
+    response_payload: Mapped[dict] = mapped_column(JSON_VARIANT, default=dict)
+    engagement_stats: Mapped[dict] = mapped_column(JSON_VARIANT, default=dict)
     engagement_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def to_dict(self) -> dict:

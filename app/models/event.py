@@ -1,11 +1,11 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+from app.models.types import JSON_VARIANT
 
 
 class Event(Base, TimestampMixin):
@@ -19,7 +19,7 @@ class Event(Base, TimestampMixin):
     ticker: Mapped[str | None] = mapped_column(String(20), index=True)
     source_priority: Mapped[int] = mapped_column(Integer, default=0)
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    summary_facts: Mapped[dict] = mapped_column(JSONB)
+    summary_facts: Mapped[dict] = mapped_column(JSON_VARIANT)
     importance_score: Mapped[float] = mapped_column(Float, default=0)
     confidence_score: Mapped[float] = mapped_column(Float, default=0)
     dedupe_key: Mapped[str] = mapped_column(String(255), unique=True)
@@ -57,14 +57,16 @@ class EventEntity(Base, TimestampMixin):
 
 class DraftPost(Base, TimestampMixin):
     __tablename__ = "draft_posts"
+    __table_args__ = (UniqueConstraint("event_id", "workspace_user_id", "platform", name="uq_draft_posts_event_customer_platform"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
+    workspace_user_id: Mapped[int | None] = mapped_column(ForeignKey("workspace_users.id", ondelete="CASCADE"))
     platform: Mapped[str] = mapped_column(String(20), default="x")
     status: Mapped[str] = mapped_column(String(30), default="draft")
     prompt_version: Mapped[str] = mapped_column(String(30), default="v1")
     draft_text: Mapped[str] = mapped_column(Text)
-    safety_flags: Mapped[dict] = mapped_column(JSONB, default=dict)
+    safety_flags: Mapped[dict] = mapped_column(JSON_VARIANT, default=dict)
     needs_review: Mapped[bool] = mapped_column(default=True)
 
     event: Mapped[Event] = relationship(back_populates="drafts")
@@ -73,6 +75,7 @@ class DraftPost(Base, TimestampMixin):
         return {
             "id": self.id,
             "event_id": self.event_id,
+            "workspace_user_id": self.workspace_user_id,
             "platform": self.platform,
             "status": self.status,
             "prompt_version": self.prompt_version,

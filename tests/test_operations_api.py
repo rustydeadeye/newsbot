@@ -33,7 +33,7 @@ def _build_client(role: str = "admin") -> tuple[TestClient, Session]:
         yield session
 
     def override_get_current_viewer():
-        return ViewerContext(user_id="user-1", email=f"{role}@example.com", role=role, display_name=role.title())
+        return ViewerContext(workspace_user_id=1, user_id="user-1", email=f"{role}@example.com", role=role, display_name=role.title())
 
     def override_require_admin():
         viewer = override_get_current_viewer()
@@ -205,6 +205,8 @@ def test_customer_events_hide_admin_fields() -> None:
         status="drafted",
     )
     db.add(event)
+    db.flush()
+    db.add(DraftPost(event_id=event.id, workspace_user_id=1, draft_text="Macro draft", status="draft", needs_review=True))
     db.commit()
 
     response = client.get("/events")

@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 
 import { getXConnectUrl } from "@/lib/api";
 
-export function ConnectXButton({ connected }: { connected: boolean }) {
+export function ConnectXButton({ connected, nextPath = "/settings" }: { connected: boolean; nextPath?: string }) {
   const searchParams = useSearchParams();
   const justConnected = searchParams.get("x_connected") === "1";
   const oauthError = searchParams.get("x_error");
@@ -16,7 +16,7 @@ export function ConnectXButton({ connected }: { connected: boolean }) {
   function connect() {
     startTransition(async () => {
       try {
-        const { auth_url } = await getXConnectUrl(null);
+        const { auth_url } = await getXConnectUrl(null, nextPath);
         window.location.href = auth_url;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to start X OAuth");

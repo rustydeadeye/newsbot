@@ -11,14 +11,15 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.schemas import CreatorSettingsUpdate
-from app.api.security import ViewerContext, get_current_viewer, require_admin
+from app.api.security import ViewerContext, get_current_viewer
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.repositories.creators import CreatorSettingsRepository
+from app.repositories.customers import CustomerProfileRepository
 
 router = APIRouter()
 
-# In-memory PKCE state store: { state: { code_verifier, created_at } }
+# In-memory PKCE state store: { state: { code_verifier, created_at, workspace_user_id, target, next_path } }
 # Short-lived — only valid for one OAuth round-trip (~10 minutes).
 _pkce_store: dict[str, dict] = {}
 _PKCE_TTL_SECONDS = 600
@@ -36,8 +37,15 @@ def _prune_pkce_store() -> None:
 @router.get("/creator")
 def get_creator_settings(
     db: Session = Depends(get_db),
-    _viewer: ViewerContext = Depends(get_current_viewer),
+    viewer: ViewerContext = Depends(get_current_viewer),
 ) -> dict:
+    if viewer.is_customer:
+        profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(
+            viewer.workspace_user_id,
+            default_display_name=viewer.display_name,
+        )
+        db.commit()
+        return profile.to_dict()
     settings = CreatorSettingsRepository(db).get_or_create_default()
     db.commit()
     return settings.to_dict()
@@ -49,12 +57,26 @@ def update_creator_settings(
     db: Session = Depends(get_db),
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> JSONResponse:
-    repo = CreatorSettingsRepository(db)
-    settings = repo.get_or_create_default()
     update_payload = payload.model_dump(exclude_none=True)
     if viewer.is_customer:
-        allowed_keys = {"display_name", "tone", "language", "watchlist", "blocked_phrases", "timezone", "posting_window_start", "posting_window_end"}
+        repo = CustomerProfileRepository(db)
+        settings = repo.get_or_create_for_workspace_user(
+            viewer.workspace_user_id,
+            default_display_name=viewer.display_name,
+        )
+        allowed_keys = {"display_name", "tone", "language", "watchlist", "blocked_phrases", "openai_api_key"}
         update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
+        if "openai_api_key" in update_payload:
+            token_store = dict(settings.token_store or {})
+            token_store["openai_api_key"] = update_payload.pop("openai_api_key")
+            update_payload["token_store"] = token_store
+    else:
+        repo = CreatorSettingsRepository(db)
+        settings = repo.get_or_create_default()
+        if "openai_api_key" in update_payload:
+            token_store = dict(settings.token_store or {})
+            token_store["openai_api_key"] = update_payload.pop("openai_api_key")
+            update_payload["token_store"] = token_store
 
     if "timezone" in update_payload:
         try:
@@ -81,9 +103,12 @@ def update_creator_settings(
     return JSONResponse(content=updated.to_dict())
 
 
-@router.get("/x/connect", dependencies=[Depends(require_admin)])
-def x_oauth_connect() -> dict:
-    """Return a X OAuth 2.0 authorization URL for the admin to redirect to."""
+@router.get("/x/connect")
+def x_oauth_connect(
+    next_path: str = "/settings",
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> dict:
+    """Return a X OAuth 2.0 authorization URL for the viewer to redirect to."""
     cfg = get_settings()
     if not cfg.x_client_id:
         raise HTTPException(status_code=400, detail="X_CLIENT_ID is not configured")
@@ -94,7 +119,13 @@ def x_oauth_connect() -> dict:
         hashlib.sha256(code_verifier.encode()).digest()
     ).rstrip(b"=").decode()
     state = secrets.token_urlsafe(16)
-    _pkce_store[state] = {"code_verifier": code_verifier, "created_at": time.monotonic()}
+    _pkce_store[state] = {
+        "code_verifier": code_verifier,
+        "created_at": time.monotonic(),
+        "workspace_user_id": viewer.workspace_user_id,
+        "target": "customer" if viewer.is_customer else "workspace",
+        "next_path": next_path,
+    }
 
     params = {
         "response_type": "code",
@@ -129,6 +160,7 @@ def x_oauth_callback(
     pkce = _pkce_store.pop(state, None)
     if not pkce:
         return RedirectResponse(url=f"{frontend_settings}?x_error=invalid_state")
+    frontend_settings = f"{cfg.frontend_url.rstrip('/')}{pkce.get('next_path', '/settings')}"
 
     # Exchange authorization code for tokens
     auth_header = base64.b64encode(
@@ -162,13 +194,22 @@ def x_oauth_callback(
     if not access_token:
         return RedirectResponse(url=f"{frontend_settings}?x_error=no_access_token")
 
-    repo = CreatorSettingsRepository(db)
-    creator = repo.get_or_create_default()
-    store = dict(creator.token_store or {})
-    store["x_access_token"] = access_token
-    if refresh_token:
-        store["x_refresh_token"] = refresh_token
-    creator.token_store = store
+    if pkce.get("target") == "customer":
+        repo = CustomerProfileRepository(db)
+        profile = repo.get_or_create_for_workspace_user(pkce["workspace_user_id"])
+        store = dict(profile.token_store or {})
+        store["x_access_token"] = access_token
+        if refresh_token:
+            store["x_refresh_token"] = refresh_token
+        profile.token_store = store
+    else:
+        repo = CreatorSettingsRepository(db)
+        creator = repo.get_or_create_default()
+        store = dict(creator.token_store or {})
+        store["x_access_token"] = access_token
+        if refresh_token:
+            store["x_refresh_token"] = refresh_token
+        creator.token_store = store
     db.commit()
 
     return RedirectResponse(url=f"{frontend_settings}?x_connected=1")

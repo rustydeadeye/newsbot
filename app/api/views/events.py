@@ -22,7 +22,9 @@ def list_events(
         if viewer.is_customer:
             serialized.pop("dedupe_key", None)
             serialized.pop("status", None)
-        draft = draft_repo.latest_for_event(event.id)
+        draft = draft_repo.latest_for_event(event.id, viewer.workspace_user_id if viewer.is_customer else None)
+        if viewer.is_customer and draft is None:
+            continue
         serialized["draft_id"] = draft.id if draft else None
         serialized["draft_status"] = draft.status if draft else None
         payload.append(serialized)

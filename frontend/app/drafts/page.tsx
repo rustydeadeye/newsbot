@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { ApiErrorPanel } from "@/components/api-error-panel";
 import { EmptyState } from "@/components/empty-state";
@@ -8,11 +9,14 @@ import { RejectedDraftsSection } from "@/components/rejected-drafts-section";
 import { ReviewActions } from "@/components/review-actions";
 import { ShellHeader } from "@/components/shell-header";
 import { getRejectedDrafts, getReviewDrafts } from "@/lib/api";
-import { requireServerViewer } from "@/lib/viewer";
+import { requireWorkspaceSession } from "@/lib/viewer";
 
 export default async function DraftsPage() {
-  const { viewer, accessToken } = await requireServerViewer();
+  const { viewer, accessToken, onboarding } = await requireWorkspaceSession();
   const role = viewer.role;
+  if (role === "customer" && onboarding && !onboarding.onboarding_completed) {
+    redirect("/onboarding");
+  }
   let drafts;
   let rejectedDrafts;
   try {

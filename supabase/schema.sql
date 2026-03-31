@@ -60,7 +60,8 @@ create index if not exists idx_event_entities_event_id on event_entities(event_i
 
 create table if not exists draft_posts (
   id bigserial primary key,
-  event_id bigint not null unique references events(id) on delete cascade,
+  event_id bigint not null references events(id) on delete cascade,
+  workspace_user_id bigint references workspace_users(id) on delete cascade,
   platform text not null default 'x',
   status text not null default 'draft',
   prompt_version text not null default 'v1',
@@ -70,6 +71,9 @@ create table if not exists draft_posts (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+create unique index if not exists uq_draft_posts_event_customer_platform
+  on draft_posts(event_id, workspace_user_id, platform);
+create index if not exists idx_draft_posts_workspace_user_id on draft_posts(workspace_user_id);
 
 create table if not exists publish_jobs (
   id bigserial primary key,
@@ -123,9 +127,24 @@ create table if not exists workspace_users (
 );
 create index if not exists idx_workspace_users_role on workspace_users(role);
 
+create table if not exists customer_profiles (
+  id bigserial primary key,
+  workspace_user_id bigint not null unique references workspace_users(id) on delete cascade,
+  display_name text,
+  tone text not null default 'neutral',
+  language text not null default 'en',
+  watchlist jsonb not null default '[]'::jsonb,
+  blocked_phrases jsonb not null default '[]'::jsonb,
+  token_store jsonb not null default '{}'::jsonb,
+  onboarding_completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists review_queue (
   id bigserial primary key,
   event_id bigint not null references events(id) on delete cascade,
+  workspace_user_id bigint references workspace_users(id) on delete cascade,
   reason text not null,
   assigned_to text,
   status text not null default 'open',
@@ -133,6 +152,23 @@ create table if not exists review_queue (
   updated_at timestamptz not null default now()
 );
 create index if not exists idx_review_queue_event_id on review_queue(event_id);
+create index if not exists idx_review_queue_workspace_user_id on review_queue(workspace_user_id);
+
+create table if not exists pipeline_runs (
+  id bigserial primary key,
+  workspace_user_id bigint references workspace_users(id) on delete set null,
+  requested_by text not null,
+  scope text not null,
+  status text not null default 'queued',
+  result_counts jsonb not null default '{}'::jsonb,
+  error_message text,
+  started_at timestamptz,
+  finished_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_pipeline_runs_workspace_user_id on pipeline_runs(workspace_user_id);
+create index if not exists idx_pipeline_runs_status on pipeline_runs(status);
 
 alter table sources enable row level security;
 alter table source_items enable row level security;
@@ -142,8 +178,10 @@ alter table draft_posts enable row level security;
 alter table publish_jobs enable row level security;
 alter table publish_logs enable row level security;
 alter table creator_settings enable row level security;
+alter table customer_profiles enable row level security;
 alter table workspace_users enable row level security;
 alter table review_queue enable row level security;
+alter table pipeline_runs enable row level security;
 
 do $$
 begin
@@ -196,6 +234,12 @@ begin
   end if;
 
   if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'customer_profiles' and policyname = 'customer_profiles_service_role_all'
+  ) then
+    create policy customer_profiles_service_role_all on customer_profiles for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
     select 1 from pg_policies where schemaname = 'public' and tablename = 'workspace_users' and policyname = 'workspace_users_service_role_all'
   ) then
     create policy workspace_users_service_role_all on workspace_users for all to service_role using (true) with check (true);
@@ -205,6 +249,12 @@ begin
     select 1 from pg_policies where schemaname = 'public' and tablename = 'review_queue' and policyname = 'review_queue_service_role_all'
   ) then
     create policy review_queue_service_role_all on review_queue for all to service_role using (true) with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'pipeline_runs' and policyname = 'pipeline_runs_service_role_all'
+  ) then
+    create policy pipeline_runs_service_role_all on pipeline_runs for all to service_role using (true) with check (true);
   end if;
 end
 $$;

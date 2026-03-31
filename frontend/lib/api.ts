@@ -1,5 +1,5 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-import { AuthMeResponse, CreatorSettings, DraftSummary, EventSummary, PublishJob, PublishLog, ReviewItem, SourceSummary } from "@/lib/types";
+import { AuthMeResponse, CreatorSettings, DraftSummary, EventSummary, OnboardingStatus, PipelineRun, PublishJob, PublishLog, ReviewItem, SourceSummary } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -132,6 +132,16 @@ export function runPipeline() {
   });
 }
 
+export function generateDrafts() {
+  return fetchJson<PipelineRun>("/pipeline/generate-drafts", {
+    method: "POST"
+  });
+}
+
+export function getCurrentPipelineRun(accessToken?: string | null) {
+  return fetchJson<PipelineRun | null>("/pipeline/runs/current", { accessToken });
+}
+
 export function getCreatorSettings(accessToken?: string | null) {
   return fetchJson<CreatorSettings>("/settings/creator", { accessToken });
 }
@@ -143,10 +153,34 @@ export function updateCreatorSettings(payload: Partial<CreatorSettings>) {
   });
 }
 
-export function getXConnectUrl(accessToken?: string | null) {
-  return fetchJson<{ auth_url: string }>("/settings/x/connect", { accessToken });
+export function getXConnectUrl(accessToken?: string | null, nextPath = "/settings") {
+  return fetchJson<{ auth_url: string }>(`/settings/x/connect?next_path=${encodeURIComponent(nextPath)}`, { accessToken });
 }
 
 export function getAuthMe(accessToken: string) {
   return fetchJson<AuthMeResponse>("/auth/me", { accessToken });
+}
+
+export function getOnboardingStatus(accessToken?: string | null) {
+  return fetchJson<OnboardingStatus>("/onboarding/status", { accessToken });
+}
+
+export function updateOnboardingProfile(payload: { display_name?: string; tone?: string; language?: string; watchlist?: string[]; blocked_phrases?: string[] }) {
+  return fetchJson<OnboardingStatus>("/onboarding/profile", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateOnboardingOpenAI(payload: { openai_api_key: string }) {
+  return fetchJson<OnboardingStatus>("/onboarding/openai", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function completeOnboarding() {
+  return fetchJson<OnboardingStatus>("/onboarding/complete", {
+    method: "POST"
+  });
 }

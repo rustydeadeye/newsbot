@@ -12,6 +12,7 @@ from app.models.event import DraftPost, Event
 from app.models.job import PublishJob, PublishLog
 from app.models.review import ReviewQueueItem
 from app.repositories.creators import CreatorSettingsRepository
+from app.repositories.customers import CustomerProfileRepository
 from app.repositories.drafts import DraftRepository
 from app.repositories.events import EventRepository
 from app.repositories.jobs import PublishJobRepository
@@ -99,6 +100,7 @@ def normalize_pending_items(db: Session, watchlist: set[str] | None = None) -> i
 
 
 _DRAFT_MAX_WORKERS = 5
+_CUSTOMER_DRAFT_LIMIT = 24
 
 
 def draft_pending_events(db: Session, auto_post_threshold: int) -> int:
@@ -165,6 +167,97 @@ def draft_pending_events(db: Session, auto_post_threshold: int) -> int:
     db.commit()
     logger.info("draft_pending_events created=%d drafts (parallel workers=%d)", created, _DRAFT_MAX_WORKERS)
     return created
+
+
+def _event_matches_watchlist(event: Event, watchlist: set[str]) -> bool:
+    if not watchlist:
+        return False
+    haystacks = [
+        (event.entity_name or "").lower(),
+        (event.ticker or "").lower(),
+        str(event.summary_facts.get("headline", "")).lower(),
+        str(event.summary_facts.get("subject_key", "")).lower(),
+    ]
+    return any(term in hay for term in watchlist for hay in haystacks)
+
+
+def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_threshold: int) -> dict[str, int]:
+    profile_repo = CustomerProfileRepository(db)
+    event_repo = EventRepository(db)
+    draft_repo = DraftRepository(db)
+    review_repo = ReviewQueueRepository(db)
+
+    profile = profile_repo.get_by_workspace_user_id(workspace_user_id)
+    if profile is None:
+        return {"drafted": 0, "review_items": 0, "matched_events": 0}
+
+    api_key = (profile.token_store or {}).get("openai_api_key")
+    drafting_service = DraftingService(api_key=api_key)
+    watchlist = {item.strip().lower() for item in (profile.watchlist or []) if isinstance(item, str) and item.strip()}
+
+    candidates = []
+    for event in event_repo.list_recent(limit=200):
+        if event.status not in {"normalized", "drafted", "approved", "queued", "posted"}:
+            continue
+        if draft_repo.latest_for_event(event.id, workspace_user_id) is not None:
+            continue
+        candidates.append(event)
+
+    if watchlist:
+        prioritized = [event for event in candidates if _event_matches_watchlist(event, watchlist)]
+        fallback = [event for event in candidates if event not in prioritized]
+        events_to_draft = prioritized + fallback
+    else:
+        events_to_draft = candidates
+
+    events_to_draft = events_to_draft[:_CUSTOMER_DRAFT_LIMIT]
+    if not events_to_draft:
+        db.commit()
+        return {"drafted": 0, "review_items": 0, "matched_events": 0}
+
+    created = 0
+    review_items = 0
+    results: dict[int, tuple[str, dict, float]] = {}
+    with ThreadPoolExecutor(max_workers=_DRAFT_MAX_WORKERS) as executor:
+        future_to_event = {executor.submit(drafting_service.build_draft, event): event for event in events_to_draft}
+        for future in as_completed(future_to_event):
+            event = future_to_event[future]
+            try:
+                results[event.id] = future.result()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("customer draft generation failed event_id=%s: %s", event.id, exc)
+
+    for event in events_to_draft:
+        result = results.get(event.id)
+        if result is None:
+            continue
+        draft_text, safety_flags, _latency = result
+        draft = DraftPost(
+            event_id=event.id,
+            workspace_user_id=workspace_user_id,
+            platform="x",
+            draft_text=draft_text,
+            safety_flags=safety_flags,
+            needs_review=True,
+        )
+        draft.status = "draft"
+        draft_repo.add(draft)
+        review_repo.add(
+            ReviewQueueItem(
+                event_id=event.id,
+                workspace_user_id=workspace_user_id,
+                reason=_review_reason(event, draft, auto_post_threshold),
+            )
+        )
+        created += 1
+        review_items += 1
+
+    db.commit()
+    return {
+        "drafted": created,
+        "review_items": review_items,
+        "matched_events": len(events_to_draft),
+    }
 
 
 def queue_publish_jobs(db: Session) -> int:

@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation";
+
 import { ApiErrorPanel } from "@/components/api-error-panel";
 import { ConnectXButton } from "@/components/connect-x-button";
 import { SettingsForm } from "@/components/settings-form";
@@ -7,11 +9,14 @@ import { SourceToggle } from "@/components/source-toggle";
 import { StatusPanel } from "@/components/status-panel";
 import { getCreatorSettings, getSources } from "@/lib/api";
 import { CreatorSettings, SourceSummary } from "@/lib/types";
-import { requireServerViewer } from "@/lib/viewer";
+import { requireWorkspaceSession } from "@/lib/viewer";
 
 export default async function SettingsPage() {
-  const { viewer, accessToken } = await requireServerViewer();
+  const { viewer, accessToken, onboarding } = await requireWorkspaceSession();
   const role = viewer.role;
+  if (role === "customer" && onboarding && !onboarding.onboarding_completed) {
+    redirect("/onboarding");
+  }
   let sources: SourceSummary[] = [];
   let settings: CreatorSettings;
   try {
@@ -64,7 +69,7 @@ export default async function SettingsPage() {
             title="X (Twitter) account"
             description="Connect the X account that Newsbot will post from. Tokens are stored securely and refreshed automatically."
           >
-            <ConnectXButton connected={settings.x_connected} />
+            <ConnectXButton connected={settings.x_connected} nextPath="/settings" />
           </SettingsSection>
         ) : null}
         {role === "admin" ? (

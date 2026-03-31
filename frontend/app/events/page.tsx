@@ -1,11 +1,12 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { ApiErrorPanel } from "@/components/api-error-panel";
 import { EmptyState } from "@/components/empty-state";
 import { GuidePanel } from "@/components/guide-panel";
 import { ShellHeader } from "@/components/shell-header";
 import { getEvents } from "@/lib/api";
-import { requireServerViewer } from "@/lib/viewer";
+import { requireWorkspaceSession } from "@/lib/viewer";
 
 const DRAFT_STATUS_LABELS: Record<string, string> = {
   draft: "in review",
@@ -17,8 +18,11 @@ const DRAFT_STATUS_LABELS: Record<string, string> = {
 };
 
 export default async function EventsPage() {
-  const { viewer, accessToken } = await requireServerViewer();
+  const { viewer, accessToken, onboarding } = await requireWorkspaceSession();
   const role = viewer.role;
+  if (role === "customer" && onboarding && !onboarding.onboarding_completed) {
+    redirect("/onboarding");
+  }
   let events;
   try {
     events = await getEvents(accessToken);

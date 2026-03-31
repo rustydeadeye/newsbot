@@ -1,6 +1,7 @@
 export type ViewerRole = "admin" | "customer";
 
 export type ViewerProfile = {
+  workspace_user_id: number;
   user_id: string;
   email: string;
   role: ViewerRole;
