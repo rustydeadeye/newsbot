@@ -1,19 +1,17 @@
-import base64
 from dataclasses import dataclass
 import logging
 from typing import Any
 
-import jwt
-
-_log = logging.getLogger(__name__)
+import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt import PyJWKClient
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.repositories.workspace_users import WorkspaceUserRepository
+
+_log = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -42,36 +40,28 @@ class ViewerContext:
         }
 
 
-def _decode_supabase_jwt(token: str, settings: Settings) -> dict[str, Any]:
-    if settings.supabase_jwt_secret:
-        # Supabase dashboard shows the JWT secret as a base64-encoded string.
-        # Try decoded bytes first (correct), fall back to raw string.
-        try:
-            secret: str | bytes = base64.b64decode(settings.supabase_jwt_secret)
-        except Exception:
-            secret = settings.supabase_jwt_secret
-        issuer = f"{settings.supabase_url.rstrip('/')}/auth/v1" if settings.supabase_url else None
-        try:
-            return jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated", issuer=issuer)
-        except jwt.PyJWTError:
-            # Fall back to raw string in case the secret is not base64-encoded
-            return jwt.decode(token, settings.supabase_jwt_secret, algorithms=["HS256"], audience="authenticated", issuer=issuer)
+def _verify_token_with_supabase(token: str, supabase_url: str) -> dict[str, Any]:
+    """Validate the JWT by calling Supabase's own /auth/v1/user endpoint.
+    This is always correct regardless of how the JWT secret is configured."""
+    url = f"{supabase_url.rstrip('/')}/auth/v1/user"
+    try:
+        response = httpx.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5.0)
+    except httpx.RequestError as exc:
+        _log.error("Supabase auth request failed: %s", exc)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unreachable")
 
-    if not settings.supabase_jwks_url or not settings.supabase_url:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Supabase auth is not configured",
-        )
+    if response.status_code == 401:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth token")
+    if not response.is_success:
+        _log.warning("Supabase /auth/v1/user returned %d", response.status_code)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth token")
 
-    jwk_client = PyJWKClient(settings.supabase_jwks_url)
-    signing_key = jwk_client.get_signing_key_from_jwt(token)
-    return jwt.decode(
-        token,
-        signing_key.key,
-        algorithms=["RS256"],
-        audience="authenticated",
-        issuer=f"{settings.supabase_url.rstrip('/')}/auth/v1",
-    )
+    data = response.json()
+    return {
+        "sub": data.get("id"),
+        "email": data.get("email"),
+        "user_metadata": data.get("user_metadata", {}),
+    }
 
 
 def _extract_display_name(claims: dict[str, Any]) -> str | None:
@@ -93,11 +83,10 @@ def get_current_viewer(
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
-    try:
-        claims = _decode_supabase_jwt(credentials.credentials, settings)
-    except jwt.PyJWTError as exc:
-        _log.warning("JWT decode failed: %s", exc)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth token") from exc
+    if not settings.supabase_url:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Supabase auth is not configured")
+
+    claims = _verify_token_with_supabase(credentials.credentials, settings.supabase_url)
 
     user_id = claims.get("sub")
     email = claims.get("email")
