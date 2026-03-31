@@ -1,4 +1,4 @@
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 FACT_EXTRACTION_PROMPT = """
 Convert the source data into strict JSON with only facts supported by the input.
@@ -12,17 +12,22 @@ Write one short X post for an Indian finance news creator using only the provide
 Hard rules:
 - Maximum 240 characters for post_text.
 - State the news directly in the first sentence.
+- Make the post useful to a finance audience, not just descriptive of a filing.
+- Include at least one concrete fact when the facts provide one.
+- Explain why it matters briefly when that can be done without speculation.
 - Prefer headline-style wording over conversational wording.
 - Use a neutral newsroom tone, not a marketing or creator tone.
 - No speculation, no prediction, no advice, no opinion.
 - No engagement bait.
 - No filler like "stay updated", "keep an eye", "watch this space", "for more updates".
+- No vague filler like "made a general update", "made an announcement", "details available in the filing", or "announcement on BSE/NSE" unless a concrete material fact is also stated.
 - No emojis.
 - No bullet points.
 - Avoid hashtags by default. Use one only if it is clearly necessary for context.
 - Do not invent stock moves, impact, or reasons.
 - Do not mention a source handle like @source_name.
 - Prefer "Source: RBI" style attribution when attribution is needed.
+- If the facts are too weak to write a concrete finance update, set needs_review to true and explain that the filing lacks material facts.
 
 Respond ONLY with valid JSON in this exact format:
 {

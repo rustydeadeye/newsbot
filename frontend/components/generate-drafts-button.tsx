@@ -16,6 +16,8 @@ export function GenerateDraftsButton({ label = "Generate drafts now" }: { label?
         const run = await generateDrafts();
         if (run.status === "queued" || run.status === "running") {
           setMessage("Draft generation started. This page will update as soon as your queue is ready.");
+        } else if (run.status === "empty") {
+          setMessage("No high-signal finance updates matched your setup right now.");
         } else {
           setMessage(`Latest generation status: ${run.status.replaceAll("_", " ")}.`);
         }

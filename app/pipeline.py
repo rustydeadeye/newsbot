@@ -100,7 +100,31 @@ def normalize_pending_items(db: Session, watchlist: set[str] | None = None) -> i
 
 
 _DRAFT_MAX_WORKERS = 5
-_CUSTOMER_DRAFT_LIMIT = 24
+_CUSTOMER_DRAFT_LIMIT = 6
+_CUSTOMER_WATCHLIST_MIN_SCORE = 50
+_CUSTOMER_FALLBACK_MIN_SCORE = 60
+_CUSTOMER_FALLBACK_EVENT_TYPES = {
+    "rbi_policy",
+    "rbi_penalty",
+    "sebi_circular",
+    "sebi_enforcement",
+    "macro_release",
+    "earnings",
+    "fundraise",
+    "acquisition",
+    "default_fraud",
+    "dividend",
+    "bonus_split",
+    "order_win",
+}
+_CUSTOMER_WATCHLIST_EVENT_TYPES = _CUSTOMER_FALLBACK_EVENT_TYPES | {"management_change"}
+_CUSTOMER_AUTO_POST_ALLOWLIST = {
+    "rbi_policy",
+    "rbi_penalty",
+    "sebi_circular",
+    "sebi_enforcement",
+    "macro_release",
+}
 
 
 def draft_pending_events(db: Session, auto_post_threshold: int) -> int:
@@ -181,6 +205,75 @@ def _event_matches_watchlist(event: Event, watchlist: set[str]) -> bool:
     return any(term in hay for term in watchlist for hay in haystacks)
 
 
+def _event_has_material_facts(event: Event) -> bool:
+    facts = event.summary_facts or {}
+    if facts.get("period"):
+        return True
+    if facts.get("event_date") or facts.get("broadcast_date") or facts.get("effective_date"):
+        return True
+
+    numbers = facts.get("numbers") or []
+    if isinstance(numbers, list) and any(isinstance(item, dict) and item.get("value") for item in numbers):
+        return True
+
+    filing_type = str(facts.get("filing_type") or "").lower()
+    announcement_subtype = str(facts.get("announcement_subtype") or "").lower()
+    release_type = str(facts.get("release_type") or "").lower()
+    if any(value for value in (filing_type, announcement_subtype, release_type)):
+        return True
+
+    headline = str(facts.get("headline") or "").lower()
+    material_terms = (
+        "results",
+        "quarter",
+        "q1",
+        "q2",
+        "q3",
+        "q4",
+        "dividend",
+        "bonus",
+        "split",
+        "fund raise",
+        "fundraise",
+        "qip",
+        "preferential",
+        "rights issue",
+        "acquisition",
+        "merger",
+        "penalty",
+        "order",
+        "contract",
+        "default",
+        "fraud",
+        "repo rate",
+        "monetary policy",
+        "auction",
+        "circular",
+    )
+    return any(term in headline for term in material_terms)
+
+
+def _customer_draft_skip_reason(event: Event, watchlist_match: bool) -> str | None:
+    if event.event_type == "general_update":
+        return "filtered_event_type"
+
+    allowed_types = _CUSTOMER_WATCHLIST_EVENT_TYPES if watchlist_match else _CUSTOMER_FALLBACK_EVENT_TYPES
+    if event.event_type not in allowed_types:
+        return "filtered_event_type"
+
+    minimum_score = _CUSTOMER_WATCHLIST_MIN_SCORE if watchlist_match else _CUSTOMER_FALLBACK_MIN_SCORE
+    if event.importance_score < minimum_score:
+        return "below_customer_threshold"
+
+    if event.event_type == "management_change" and event.importance_score < 60:
+        return "below_customer_threshold"
+
+    if not _event_has_material_facts(event):
+        return "no_material_facts"
+
+    return None
+
+
 def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_threshold: int) -> dict[str, int]:
     profile_repo = CustomerProfileRepository(db)
     event_repo = EventRepository(db)
@@ -196,24 +289,43 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
     watchlist = {item.strip().lower() for item in (profile.watchlist or []) if isinstance(item, str) and item.strip()}
 
     candidates = []
+    skip_counts = {
+        "filtered_event_type": 0,
+        "below_customer_threshold": 0,
+        "no_material_facts": 0,
+        "already_drafted_for_customer": 0,
+    }
     for event in event_repo.list_recent(limit=200):
         if event.status not in {"normalized", "drafted", "approved", "queued", "posted"}:
             continue
         if draft_repo.latest_for_event(event.id, workspace_user_id) is not None:
+            skip_counts["already_drafted_for_customer"] += 1
             continue
-        candidates.append(event)
+        watchlist_match = _event_matches_watchlist(event, watchlist)
+        skip_reason = _customer_draft_skip_reason(event, watchlist_match)
+        if skip_reason is not None:
+            skip_counts[skip_reason] += 1
+            continue
+        candidates.append((event, watchlist_match))
 
     if watchlist:
-        prioritized = [event for event in candidates if _event_matches_watchlist(event, watchlist)]
-        fallback = [event for event in candidates if event not in prioritized]
+        prioritized = [event for event, is_match in candidates if is_match]
+        fallback = [event for event, is_match in candidates if not is_match]
         events_to_draft = prioritized + fallback
     else:
-        events_to_draft = candidates
+        events_to_draft = [event for event, _ in candidates]
 
+    eligible_count = len(events_to_draft)
     events_to_draft = events_to_draft[:_CUSTOMER_DRAFT_LIMIT]
     if not events_to_draft:
         db.commit()
-        return {"drafted": 0, "review_items": 0, "matched_events": 0}
+        return {
+            "drafted": 0,
+            "review_items": 0,
+            "matched_events": 0,
+            "eligible_events": eligible_count,
+            **skip_counts,
+        }
 
     created = 0
     review_items = 0
@@ -257,6 +369,8 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
         "drafted": created,
         "review_items": review_items,
         "matched_events": len(events_to_draft),
+        "eligible_events": eligible_count,
+        **skip_counts,
     }
 
 

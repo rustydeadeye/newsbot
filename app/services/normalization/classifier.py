@@ -41,6 +41,8 @@ def classify_event_type(
         if sebi_doc_type == "sebi_press_release":
             return "sebi_circular"  # treat SEBI press releases as policy circulars
         return "sebi_circular"  # default for SEBI items not otherwise classifiable
+    if any(term in lowered for term in ("quarter ended", "year ended", "q1", "q2", "q3", "q4", "fy", "financial results", "results for")):
+        return "earnings"
     if section == "financial_results" or "results" in lowered or "financial results" in lowered:
         return "earnings"
     if section == "corporate_actions" and "dividend" in lowered:

@@ -146,7 +146,7 @@ export default async function DraftsPage({
             title={role === "customer" ? "No drafts are ready yet" : "No drafts need review"}
             description={
               role === "customer"
-                ? "Generate drafts from the latest updates or come back when new review items are ready."
+                ? "Newsbot only surfaces stronger finance updates here. Add a watchlist or generate again when more material events arrive."
                 : "When Newsbot needs help refining copy, those drafts will appear here."
             }
             action={role === "customer" ? <GenerateDraftsButton /> : <Link href="/events" className="button secondary">View Events</Link>}

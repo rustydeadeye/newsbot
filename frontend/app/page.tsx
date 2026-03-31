@@ -221,8 +221,8 @@ export default async function HomePage() {
       {state === "generation_no_matches" ? (
         <StatusPanel
           eyebrow="Generation status"
-          title="No matching events found"
-          description="No recent updates matched your current watchlist or profile. You can broaden your settings or try again in a little while."
+          title="No high-signal finance updates matched your setup"
+          description="Newsbot skipped low-value or generic filings this run. Add companies or topics to your watchlist, or try again when stronger updates arrive."
           tone="warning"
         />
       ) : null}
@@ -241,8 +241,8 @@ export default async function HomePage() {
       ) : null}
       {state === "generation_no_matches" ? (
         <EmptyState
-          title="Nothing needs review right now"
-          description="No recent updates matched your current setup. Update your watchlist or try another generation run when new updates arrive."
+          title="Nothing high-signal needs review right now"
+          description="This run only surfaces stronger finance updates. Update your watchlist for tighter relevance, or try again when more material news arrives."
           action={<GenerateDraftsButton label="Try again" />}
         />
       ) : null}
