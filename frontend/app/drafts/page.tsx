@@ -1,18 +1,25 @@
+import Link from "next/link";
+
 import { ApiErrorPanel } from "@/components/api-error-panel";
 import { EmptyState } from "@/components/empty-state";
 import { GuidePanel } from "@/components/guide-panel";
 import { QueueReviewRow } from "@/components/queue-review-row";
+import { RejectedDraftsSection } from "@/components/rejected-drafts-section";
 import { ReviewActions } from "@/components/review-actions";
 import { ShellHeader } from "@/components/shell-header";
-import { getReviewDrafts } from "@/lib/api";
+import { getRejectedDrafts, getReviewDrafts } from "@/lib/api";
 import { requireServerViewer } from "@/lib/viewer";
 
 export default async function DraftsPage() {
   const { viewer, accessToken } = await requireServerViewer();
   const role = viewer.role;
   let drafts;
+  let rejectedDrafts;
   try {
-    drafts = await getReviewDrafts(accessToken);
+    [drafts, rejectedDrafts] = await Promise.all([
+      getReviewDrafts(accessToken),
+      getRejectedDrafts(accessToken),
+    ]);
   } catch (error) {
     return (
       <div className="page-grid">
@@ -57,6 +64,7 @@ export default async function DraftsPage() {
           <EmptyState
             title="No drafts need review"
             description="When Newsbot needs help refining copy, those drafts will appear here."
+            action={<Link href="/events" className="button secondary">View Events</Link>}
           />
         ) : null}
         {drafts.map((draft) => (
@@ -69,6 +77,8 @@ export default async function DraftsPage() {
                   reason: draft.needs_review ? "manual_review" : "resolved",
                   assigned_to: null,
                   status: draft.status,
+                  sla_due_at: null,
+                  overdue: false,
                   event: draft.event ?? null,
                   draft
                 }}
@@ -77,6 +87,16 @@ export default async function DraftsPage() {
                 <div className="lead-review-block">
                   <div className="section-label">Source context</div>
                   <div className="card-subtle">{String(draft.event?.summary_facts?.source_name ?? "Unknown source")}</div>
+                  {draft.event?.summary_facts?.document_url || draft.event?.summary_facts?.source_url ? (
+                    <a
+                      className="source-link"
+                      href={String(draft.event.summary_facts.document_url ?? draft.event.summary_facts.source_url)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      View source →
+                    </a>
+                  ) : null}
                 </div>
                 <div className="lead-review-block">
                   <div className="section-label">Editing mode</div>
@@ -94,6 +114,9 @@ export default async function DraftsPage() {
           </div>
         ))}
       </div>
+      {rejectedDrafts.length > 0 ? (
+        <RejectedDraftsSection drafts={rejectedDrafts} />
+      ) : null}
     </div>
   );
 }

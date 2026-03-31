@@ -1,10 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.event import DraftPost, Event
 from app.models.job import PublishJob, PublishLog
+
+_STUCK_PUBLISHING_TIMEOUT_MINUTES = 5
 
 
 class PublishJobRepository:
@@ -29,6 +31,14 @@ class PublishJobRepository:
             job.status = "publishing"
         self.db.flush()
         return jobs
+
+    def find_stuck_publishing(self) -> list[PublishJob]:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STUCK_PUBLISHING_TIMEOUT_MINUTES)
+        stmt = select(PublishJob).where(
+            PublishJob.status == "publishing",
+            PublishJob.updated_at < cutoff,
+        )
+        return list(self.db.scalars(stmt))
 
     def list_recent(self, limit: int = 50) -> list[PublishJob]:
         stmt = select(PublishJob).order_by(PublishJob.updated_at.desc()).limit(limit)
@@ -77,4 +87,17 @@ class PublishLogRepository:
 
     def list_recent(self, limit: int = 50) -> list[PublishLog]:
         stmt = select(PublishLog).order_by(PublishLog.created_at.desc()).limit(limit)
+        return list(self.db.scalars(stmt))
+
+    def list_needing_engagement_fetch(self, min_age_hours: int = 24, limit: int = 20) -> list[PublishLog]:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=min_age_hours)
+        stmt = (
+            select(PublishLog)
+            .where(
+                PublishLog.platform_post_id.is_not(None),
+                PublishLog.engagement_fetched_at.is_(None),
+                PublishLog.posted_at <= cutoff,
+            )
+            .limit(limit)
+        )
         return list(self.db.scalars(stmt))

@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -18,7 +19,7 @@ class Event(Base, TimestampMixin):
     ticker: Mapped[str | None] = mapped_column(String(20), index=True)
     source_priority: Mapped[int] = mapped_column(Integer, default=0)
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    summary_facts: Mapped[dict] = mapped_column(JSON)
+    summary_facts: Mapped[dict] = mapped_column(JSONB)
     importance_score: Mapped[float] = mapped_column(Float, default=0)
     confidence_score: Mapped[float] = mapped_column(Float, default=0)
     dedupe_key: Mapped[str] = mapped_column(String(255), unique=True)
@@ -63,7 +64,7 @@ class DraftPost(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(30), default="draft")
     prompt_version: Mapped[str] = mapped_column(String(30), default="v1")
     draft_text: Mapped[str] = mapped_column(Text)
-    safety_flags: Mapped[dict] = mapped_column(JSON, default=dict)
+    safety_flags: Mapped[dict] = mapped_column(JSONB, default=dict)
     needs_review: Mapped[bool] = mapped_column(default=True)
 
     event: Mapped[Event] = relationship(back_populates="drafts")

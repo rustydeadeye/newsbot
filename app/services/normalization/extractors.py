@@ -21,7 +21,8 @@ def extract_facts(source: Source, item: SourceItem) -> dict:
     section = item.raw_payload.get("section")
     ticker = _extract_ticker(source, item, title)
     entity_name = _extract_entity_name(item, ticker)
-    event_type = classify_event_type(title, source.name, section)
+    sebi_doc_type = item.raw_payload.get("sebi_document_type") if source.name == "sebi_releases" else None
+    event_type = classify_event_type(title, source.name, section, sebi_doc_type=sebi_doc_type)
     period = item.raw_payload.get("period") or _extract_period(title)
     numbers = _extract_numbers(title)
     filing_type = _extract_filing_type(item, event_type, section)

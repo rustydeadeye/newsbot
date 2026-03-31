@@ -1,6 +1,8 @@
+from contextlib import asynccontextmanager
 import logging
 import logging.config
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -29,10 +31,58 @@ _LOG_CONFIG = {
 }
 
 
+def _run_pipeline() -> None:
+    from app.workers.runner import run_cycle
+    try:
+        result = run_cycle()
+        logging.getLogger(__name__).info("pipeline cycle complete: %s", result)
+    except Exception:
+        logging.getLogger(__name__).exception("pipeline cycle failed")
+
+
+def _run_engagement_fetch() -> None:
+    from app.workers.runner import run_engagement_fetch
+    try:
+        count = run_engagement_fetch()
+        if count:
+            logging.getLogger(__name__).info("engagement fetch complete: fetched=%d", count)
+    except Exception:
+        logging.getLogger(__name__).exception("engagement fetch failed")
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    settings = get_settings()
+    scheduler = BackgroundScheduler(daemon=True)
+    scheduler.add_job(
+        _run_pipeline,
+        trigger="interval",
+        seconds=settings.pipeline_interval_sec,
+        id="pipeline_cycle",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_engagement_fetch,
+        trigger="interval",
+        hours=1,
+        id="engagement_fetch",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    logging.getLogger(__name__).info(
+        "Scheduler started — pipeline interval=%ds, engagement fetch every 1h",
+        settings.pipeline_interval_sec,
+    )
+    yield
+    scheduler.shutdown(wait=False)
+
+
 def create_app() -> FastAPI:
     logging.config.dictConfig(_LOG_CONFIG)
     settings = get_settings()
-    app = FastAPI(title=settings.app_name)
+    app = FastAPI(title=settings.app_name, lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

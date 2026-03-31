@@ -36,3 +36,12 @@ class DraftRepository:
             .limit(1)
         )
         return self.db.scalar(stmt)
+
+    def list_rejected(self, limit: int = 50) -> list[DraftPost]:
+        stmt = (
+            select(DraftPost)
+            .where(DraftPost.status == "rejected")
+            .order_by(DraftPost.updated_at.desc())
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt))

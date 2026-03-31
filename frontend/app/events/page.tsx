@@ -1,9 +1,20 @@
+import Link from "next/link";
+
 import { ApiErrorPanel } from "@/components/api-error-panel";
 import { EmptyState } from "@/components/empty-state";
 import { GuidePanel } from "@/components/guide-panel";
 import { ShellHeader } from "@/components/shell-header";
 import { getEvents } from "@/lib/api";
 import { requireServerViewer } from "@/lib/viewer";
+
+const DRAFT_STATUS_LABELS: Record<string, string> = {
+  draft: "in review",
+  approved: "approved",
+  queued: "queued",
+  posted: "posted",
+  rejected: "rejected",
+  failed: "failed",
+};
 
 export default async function EventsPage() {
   const { viewer, accessToken } = await requireServerViewer();
@@ -72,6 +83,16 @@ export default async function EventsPage() {
               <div className="card-subtle">Confidence {event.confidence_score}</div>
             </div>
             {role === "admin" && event.dedupe_key ? <div className="mono event-detail">{event.dedupe_key}</div> : null}
+            {event.draft_status ? (
+              <div className="row space">
+                <span className={event.draft_status === "rejected" || event.draft_status === "failed" ? "pill danger" : event.draft_status === "posted" ? "pill" : "pill warn"}>
+                  {DRAFT_STATUS_LABELS[event.draft_status] ?? event.draft_status}
+                </span>
+                {event.draft_id && (event.draft_status === "draft" || event.draft_status === "approved") ? (
+                  <Link href="/drafts" className="source-link">Review Draft →</Link>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>

@@ -6,3 +6,6 @@ __pycache__/
 frontend/.env.local
 frontend/.next/
 frontend/node_modules/
+.mcp.json
+mcp_servers/
+scripts/set-fly-secrets-filled.sh

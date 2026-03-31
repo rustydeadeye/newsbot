@@ -59,9 +59,26 @@ export function getReviewDrafts(accessToken?: string | null) {
   return fetchJson<DraftSummary[]>("/review/drafts", { accessToken });
 }
 
+export function getRejectedDrafts(accessToken?: string | null) {
+  return fetchJson<DraftSummary[]>("/review/drafts/rejected", { accessToken });
+}
+
+export function reopenDraft(draftId: number) {
+  return fetchJson<DraftSummary>(`/review/drafts/${draftId}/reopen`, {
+    method: "POST"
+  });
+}
+
 export function approveDraft(draftId: number, payload: { reviewer?: string; edited_text?: string; auto_queue?: boolean }) {
-  return fetchJson<{ draft: DraftSummary; queued: boolean }>(`/review/drafts/${draftId}/approve`, {
+  return fetchJson<{ draft: DraftSummary; queued: boolean; warning?: string }>(`/review/drafts/${draftId}/approve`, {
     method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function patchSource(sourceId: number, payload: { enabled: boolean }) {
+  return fetchJson<{ id: number; name: string; enabled: boolean }>(`/sources/${sourceId}`, {
+    method: "PATCH",
     body: JSON.stringify(payload)
   });
 }
@@ -103,6 +120,18 @@ export function retryPublishJob(jobId: number) {
   });
 }
 
+export function cancelPublishJob(jobId: number) {
+  return fetchJson<PublishJob>(`/publish-jobs/${jobId}/cancel`, {
+    method: "POST"
+  });
+}
+
+export function runPipeline() {
+  return fetchJson<{ ingested: Record<string, number>; normalized: number; drafted: number; queued: number; posted: number }>("/pipeline/run", {
+    method: "POST"
+  });
+}
+
 export function getCreatorSettings(accessToken?: string | null) {
   return fetchJson<CreatorSettings>("/settings/creator", { accessToken });
 }
@@ -112,6 +141,10 @@ export function updateCreatorSettings(payload: Partial<CreatorSettings>) {
     method: "PUT",
     body: JSON.stringify(payload)
   });
+}
+
+export function getXConnectUrl(accessToken?: string | null) {
+  return fetchJson<{ auth_url: string }>("/settings/x/connect", { accessToken });
 }
 
 export function getAuthMe(accessToken: string) {

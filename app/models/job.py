@@ -1,6 +1,8 @@
 from datetime import datetime
+import uuid
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -17,6 +19,7 @@ class PublishJob(Base, TimestampMixin):
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
     result_message: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str | None] = mapped_column(String(36), unique=True, default=lambda: str(uuid.uuid4()))
 
     def to_dict(self) -> dict:
         return {
@@ -39,7 +42,9 @@ class PublishLog(Base, TimestampMixin):
     publish_job_id: Mapped[int] = mapped_column(ForeignKey("publish_jobs.id", ondelete="CASCADE"))
     platform_post_id: Mapped[str | None] = mapped_column(String(255))
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    response_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    response_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    engagement_stats: Mapped[dict] = mapped_column(JSONB, default=dict)
+    engagement_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def to_dict(self) -> dict:
         return {
@@ -48,5 +53,7 @@ class PublishLog(Base, TimestampMixin):
             "platform_post_id": self.platform_post_id,
             "posted_at": self.posted_at.isoformat() if self.posted_at else None,
             "response_payload": self.response_payload,
+            "engagement_stats": self.engagement_stats,
+            "engagement_fetched_at": self.engagement_fetched_at.isoformat() if self.engagement_fetched_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 import logging
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 MAX_PUBLISH_ATTEMPTS = 3
 _RETRY_BACKOFF_MINUTES = [5, 15]  # delay before attempt 2 and 3
+_DEFAULT_TZ = "Asia/Kolkata"
 
 
 def normalize_pending_items(db: Session, watchlist: set[str] | None = None) -> int:
@@ -95,24 +98,61 @@ def normalize_pending_items(db: Session, watchlist: set[str] | None = None) -> i
     return created
 
 
+_DRAFT_MAX_WORKERS = 5
+
+
 def draft_pending_events(db: Session, auto_post_threshold: int) -> int:
     event_repo = EventRepository(db)
     draft_repo = DraftRepository(db)
     review_repo = ReviewQueueRepository(db)
-    drafting_service = DraftingService()
-    created = 0
+    creator_settings = CreatorSettingsRepository(db).get_or_create_default()
+    workspace_openai_key = (creator_settings.token_store or {}).get("openai_api_key")
+    drafting_service = DraftingService(api_key=workspace_openai_key)
 
+    events_to_draft = []
     for event in event_repo.list_for_drafting():
         if draft_repo.latest_for_event(event.id) is not None:
             logger.debug("event_id=%s already has a draft, skipping", event.id)
             event.status = "drafted"
-            continue
-        draft = drafting_service.make_draft_post(event)
+        else:
+            events_to_draft.append(event)
+
+    if not events_to_draft:
+        db.commit()
+        return 0
+
+    # Run OpenAI calls concurrently; DB writes happen sequentially after
+    results: dict[int, tuple[str, dict, float]] = {}
+    with ThreadPoolExecutor(max_workers=_DRAFT_MAX_WORKERS) as executor:
+        future_to_event = {executor.submit(drafting_service.build_draft, event): event for event in events_to_draft}
+        for future in as_completed(future_to_event):
+            event = future_to_event[future]
+            try:
+                results[event.id] = future.result()
+            except Exception:
+                logger.warning("build_draft failed for event_id=%s; using fallback", event.id, exc_info=True)
+                fallback = drafting_service._fallback_text(event.summary_facts)
+                results[event.id] = (fallback, drafting_service._safety_flags(fallback), 0.0)
+
+    created = 0
+    for event in events_to_draft:
+        draft_text, safety_flags, ai_confidence = results[event.id]
+        if ai_confidence > 0:
+            safety_flags["ai_confidence"] = round(ai_confidence, 3)
+        from app.services.drafting.prompts import PROMPT_VERSION
+        draft = DraftPost(
+            event_id=event.id,
+            platform="x",
+            draft_text=draft_text,
+            safety_flags=safety_flags,
+            needs_review=safety_flags.get("needs_review", False),
+            prompt_version=PROMPT_VERSION,
+        )
         should_review = draft.needs_review or event.importance_score < auto_post_threshold or event.confidence_score < 0.85
         if should_review:
             draft.status = "draft"
             draft.needs_review = True
-            review_repo.add(ReviewQueueItem(event_id=event.id, reason=_review_reason(event, draft)))
+            review_repo.add(ReviewQueueItem(event_id=event.id, reason=_review_reason(event, draft, auto_post_threshold)))
             logger.debug("event_id=%s queued for review reason=%s", event.id, _review_reason(event, draft))
         else:
             draft.status = "approved"
@@ -121,8 +161,9 @@ def draft_pending_events(db: Session, auto_post_threshold: int) -> int:
         draft_repo.add(draft)
         event.status = "drafted"
         created += 1
+
     db.commit()
-    logger.info("draft_pending_events created=%d drafts", created)
+    logger.info("draft_pending_events created=%d drafts (parallel workers=%d)", created, _DRAFT_MAX_WORKERS)
     return created
 
 
@@ -138,10 +179,34 @@ def queue_publish_jobs(db: Session) -> int:
 
 def publish_ready_jobs(db: Session) -> int:
     job_repo = PublishJobRepository(db)
-    publisher = XPublisher()
+
+    # Release any jobs stuck in "publishing" (e.g. from a crashed worker)
+    stuck = job_repo.find_stuck_publishing()
+    for job in stuck:
+        job.status = "failed"
+        job.last_error = "timeout_stuck_in_publishing"
+        logger.error("job_id=%s stuck in publishing; marking failed", job.id)
+    if stuck:
+        db.commit()
+
+    # Load live tokens from DB so refreshes survive process restarts
+    creator_settings = CreatorSettingsRepository(db).get_or_create_default()
+    token_store = creator_settings.token_store or {}
+
+    def _save_tokens(access_token: str, refresh_token: str) -> None:
+        creator_settings.token_store = {
+            **creator_settings.token_store,
+            "x_access_token": access_token,
+            "x_refresh_token": refresh_token,
+        }
+        db.flush()
+        logger.info("Refreshed X tokens persisted to DB")
+
+    publisher = XPublisher(token_store=token_store, on_token_refresh=_save_tokens)
     published = 0
     jobs = job_repo.claim_ready()
     db.commit()
+
     for job in jobs:
         draft = db.get(DraftPost, job.draft_post_id)
         if draft is None:
@@ -150,13 +215,23 @@ def publish_ready_jobs(db: Session) -> int:
             logger.error("job_id=%s has no associated draft", job.id)
             continue
         try:
-            response = publisher.publish(draft.draft_text)
+            response = publisher.publish(draft.draft_text, idempotency_key=job.idempotency_key)
             result_status = response.get("status")
+
             if result_status == "skipped":
                 job.status = "skipped"
                 job.result_message = response.get("reason")
                 logger.warning("job_id=%s skipped: %s", job.id, response.get("reason"))
                 continue
+
+            if result_status == "rate_limited":
+                retry_after = response.get("retry_after_seconds", 900)
+                job.status = "queued"
+                job.scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=retry_after)
+                # Do NOT increment attempt_count — rate limits are not failures
+                logger.warning("job_id=%s rate limited by X; retrying in %ds", job.id, retry_after)
+                continue
+
             job.status = "posted"
             job.result_message = None
             draft.status = "posted"
@@ -173,6 +248,7 @@ def publish_ready_jobs(db: Session) -> int:
             )
             published += 1
             logger.info("job_id=%s published successfully", job.id)
+
         except RuntimeError as exc:
             job.attempt_count += 1
             job.last_error = str(exc)
@@ -184,15 +260,17 @@ def publish_ready_jobs(db: Session) -> int:
             else:
                 job.status = "failed"
                 logger.error("job_id=%s publish failed permanently after %d attempts: %s", job.id, job.attempt_count, exc)
+
     db.commit()
     logger.info("publish_ready_jobs published=%d", published)
     return published
 
 
-def _review_reason(event: Event, draft) -> str:
-    if draft.safety_flags.get("needs_review"):
+def _review_reason(event: Event, draft, auto_post_threshold: int = 80) -> str:
+    flags = draft.safety_flags or {}
+    if flags.get("needs_review"):
         return "blocked_phrase"
-    if event.importance_score < 80:
+    if event.importance_score < auto_post_threshold:
         return "below_auto_post_threshold"
     if event.confidence_score < 0.85:
         return "low_confidence"
@@ -223,13 +301,49 @@ def _queue_decision(
     if recent_conflict:
         return "cooldown_duplicate"
 
+    if not _in_posting_window(creator_settings, now):
+        return "outside_posting_window"
+
     return "queue"
 
 
+def _in_posting_window(creator_settings: CreatorSettings, now_utc: datetime) -> bool:
+    start = creator_settings.posting_window_start
+    end = creator_settings.posting_window_end
+    if start is None or end is None:
+        return True  # no restriction set
+    if start == end:
+        return True  # degenerate window — treat as no restriction rather than blocking all posts
+    try:
+        tz = ZoneInfo(creator_settings.timezone or _DEFAULT_TZ)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo(_DEFAULT_TZ)
+    local_hour = now_utc.astimezone(tz).hour
+    if start < end:
+        return start <= local_hour < end
+    # overnight window e.g. 22–6
+    return local_hour >= start or local_hour < end
+
+
+def _next_window_open(creator_settings: CreatorSettings, now_utc: datetime) -> datetime:
+    start = creator_settings.posting_window_start
+    if start is None:
+        return now_utc
+    try:
+        tz = ZoneInfo(creator_settings.timezone or _DEFAULT_TZ)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo(_DEFAULT_TZ)
+    local_now = now_utc.astimezone(tz)
+    next_open = local_now.replace(hour=start, minute=0, second=0, microsecond=0)
+    if next_open <= local_now:
+        next_open = next_open + timedelta(days=1)
+    return next_open.astimezone(timezone.utc)
+
+
 def _cooldown_minutes(event: Event) -> int:
-    if event.event_type in {"rbi_policy", "macro_release", "sebi_circular", "sebi_enforcement"}:
+    if event.event_type in {"rbi_policy", "rbi_penalty", "macro_release", "sebi_circular", "sebi_enforcement", "default_fraud"}:
         return 120
-    if event.event_type in {"earnings", "dividend", "bonus_split", "fundraise", "order_win"}:
+    if event.event_type in {"earnings", "dividend", "bonus_split", "fundraise", "order_win", "acquisition"}:
         return 45
     return 30
 
@@ -247,12 +361,21 @@ def enqueue_approved_draft(db: Session, draft_id: int) -> bool:
         draft.status = "failed"
         return False
     decision = _queue_decision(job_repo, creator_settings, event, draft)
+
+    if decision == "outside_posting_window":
+        scheduled_for = _next_window_open(creator_settings, datetime.now(timezone.utc))
+        job_repo.add(PublishJob(draft_post_id=draft.id, scheduled_for=scheduled_for))
+        draft.status = "queued"
+        logger.info("draft_id=%s scheduled for next posting window at %s", draft.id, scheduled_for.strftime("%H:%M UTC"))
+        return True
+
     if decision != "queue":
         draft.status = "draft"
         draft.needs_review = True
         draft.safety_flags = {**draft.safety_flags, "guardrail_reason": decision}
         review_repo.add(ReviewQueueItem(event_id=event.id, reason=decision))
         return False
+
     job_repo.add(PublishJob(draft_post_id=draft.id))
     draft.status = "queued"
     return True

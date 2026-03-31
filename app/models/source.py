@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -16,7 +17,7 @@ class Source(Base, TimestampMixin):
     base_url: Mapped[str] = mapped_column(Text)
     poll_interval_sec: Mapped[int] = mapped_column(Integer, default=300)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
     items: Mapped[list["SourceItem"]] = relationship(back_populates="source")
 
@@ -40,7 +41,7 @@ class SourceItem(Base, TimestampMixin):
     url: Mapped[str] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    raw_payload: Mapped[dict] = mapped_column(JSON)
+    raw_payload: Mapped[dict] = mapped_column(JSONB)
     checksum: Mapped[str] = mapped_column(String(64), index=True)
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
 

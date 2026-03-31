@@ -8,6 +8,13 @@ class SourceRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
+    def get(self, source_id: int) -> Source | None:
+        return self.db.get(Source, source_id)
+
+    def list_all(self) -> list[Source]:
+        stmt: Select[tuple[Source]] = select(Source).order_by(Source.id)
+        return list(self.db.scalars(stmt))
+
     def list_enabled(self) -> list[Source]:
         stmt: Select[tuple[Source]] = select(Source).where(Source.enabled.is_(True)).order_by(Source.id)
         return list(self.db.scalars(stmt))

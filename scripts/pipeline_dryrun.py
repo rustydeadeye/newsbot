@@ -30,6 +30,7 @@ from app.services.ingestion.adapters import (
     MOSPIPressReleaseAdapter,
     NSECorporateFilingsAdapter,
     RSSSourceAdapter,
+    SEBIRSSAdapter,
 )
 from app.services.ingestion.base import FetchedItem
 from app.services.normalization.dedupe import make_dedupe_key
@@ -40,6 +41,7 @@ AUTO_POST_THRESHOLD = 80  # mirrors default settings
 
 SOURCES = [
     {"key": "rbi",   "name": "rbi_press_releases",    "type": "rss",  "url": "https://rbi.org.in/pressreleases_rss.xml",          "cls": RSSSourceAdapter},
+    {"key": "sebi",  "name": "sebi_releases",          "type": "rss",  "url": "https://www.sebi.gov.in/sebirss.xml",               "cls": SEBIRSSAdapter},
     {"key": "bse",   "name": "bse_announcements",      "type": "rss",  "url": "https://www.bseindia.com/data/xml/announcements.xml","cls": BSEMultiRSSAdapter},
     {"key": "nse",   "name": "nse_corporate_filings",  "type": "html", "url": "https://www.nseindia.com/companies-listing/corporate-filings-application", "cls": NSECorporateFilingsAdapter},
     {"key": "mospi", "name": "mospi_releases",          "type": "html", "url": "https://mospi.gov.in/press-release",                "cls": MOSPIPressReleaseAdapter},
@@ -114,12 +116,13 @@ def fetch_and_process(src: dict, drafting: DraftingService) -> list[PipelineResu
     for fetched in items:
         source_item = _fake_source_item(fetched)
         facts = extract_facts(source, source_item)
-        confidence = 0.95 if src["name"] in SOURCE_PRIORITY else 0.70
+        fallback_confidence = 0.95 if src["name"] in SOURCE_PRIORITY else 0.70
         importance = score_event(src["name"], facts["event_class"], facts.get("ticker"))
 
-        event = _fake_event(facts, importance, confidence)
+        event = _fake_event(facts, importance, fallback_confidence)
         draft = drafting.make_draft_post(event)
 
+        confidence = draft.safety_flags.get("ai_confidence") or fallback_confidence
         reason = _review_reason(importance, confidence, draft.safety_flags)
         results.append(PipelineResult(
             source_name=src["name"],

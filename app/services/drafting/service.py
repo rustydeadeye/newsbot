@@ -1,57 +1,106 @@
 from __future__ import annotations
+import json
+import logging
 import re
+import time
 
 try:
-    from openai import OpenAI
+    from openai import OpenAI, RateLimitError, APIStatusError
 except ModuleNotFoundError:  # pragma: no cover - optional dependency in test env
     OpenAI = None
+    RateLimitError = Exception
+    APIStatusError = Exception
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import get_settings
 from app.models.event import DraftPost, Event
 from app.prompts import SAFETY_BLOCKLIST, STYLE_BLOCKLIST
-from app.services.drafting.prompts import POST_GENERATION_PROMPT
+from app.services.drafting.prompts import POST_GENERATION_PROMPT, PROMPT_VERSION
 
 
 class DraftingService:
-    def __init__(self) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
         settings = get_settings()
         self.model = settings.openai_model
-        self.client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key and OpenAI else None
+        resolved_key = api_key or settings.openai_api_key
+        self.client = OpenAI(api_key=resolved_key) if resolved_key and OpenAI else None
 
-    def build_draft(self, event: Event) -> tuple[str, dict]:
+    def build_draft(self, event: Event) -> tuple[str, dict, float]:
         facts = event.summary_facts
         fallback = self._fallback_text(facts)
         if not self.client:
-            return fallback, self._safety_flags(fallback)
+            return fallback, self._safety_flags(fallback), 0.0
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You write factual finance news posts for social media. "
-                        "You must follow the user's style rules exactly and never add unsupported claims."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"{POST_GENERATION_PROMPT}\n\n"
-                        "Facts:\n"
-                        f"{facts}"
-                    ),
-                },
-            ],
-        )
-        raw = response.choices[0].message.content if response.choices else None
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You write factual finance news posts for social media. "
+                    "You must follow the user's style rules exactly and never add unsupported claims. "
+                    "Always respond with valid JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"{POST_GENERATION_PROMPT}\n\nFacts:\n{facts}",
+            },
+        ]
+        raw = self._call_openai_with_retry(messages)
+        parsed = self._parse_json_response(raw)
+        if parsed:
+            text = self._normalize_text(parsed.get("post_text", "").strip() or fallback, facts)
+            ai_confidence = float(parsed.get("confidence", 0.0))
+            ai_needs_review = bool(parsed.get("needs_review", False))
+            ai_review_reason = parsed.get("review_reason")
+            flags = self._safety_flags(text)
+            if ai_needs_review:
+                flags["needs_review"] = True
+            if ai_review_reason:
+                flags["review_reason"] = ai_review_reason
+            return text, flags, ai_confidence
         text = self._normalize_text((raw or fallback).strip(), facts)
-        if text == "REVIEW_REQUIRED":
-            text = fallback
-        return text, self._safety_flags(text)
+        return text, self._safety_flags(text), 0.0
+
+    def _call_openai_with_retry(self, messages: list[dict]) -> str | None:
+        backoffs = [5.0, 10.0]
+        for attempt, backoff in enumerate([0.0] + backoffs):
+            if backoff:
+                time.sleep(backoff)
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    response_format={"type": "json_object"},
+                    messages=messages,
+                )
+                return response.choices[0].message.content if response.choices else None
+            except RateLimitError:
+                if attempt == len(backoffs):
+                    logger.warning("OpenAI rate limit hit after %d attempts; using fallback", attempt + 1)
+                    return None
+                logger.warning("OpenAI rate limit (attempt %d); retrying in %.0fs", attempt + 1, backoffs[attempt] if attempt < len(backoffs) else 0)
+            except APIStatusError as exc:
+                if exc.status_code < 500 or attempt == len(backoffs):
+                    logger.warning("OpenAI API error %s; using fallback", exc.status_code)
+                    return None
+                logger.warning("OpenAI server error %s (attempt %d); retrying", exc.status_code, attempt + 1)
+            except Exception:
+                logger.warning("OpenAI unexpected error; using fallback", exc_info=True)
+                return None
+        return None
+
+    def _parse_json_response(self, raw: str | None) -> dict | None:
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return None
 
     def make_draft_post(self, event: Event) -> DraftPost:
-        draft_text, safety_flags = self.build_draft(event)
+        draft_text, safety_flags, ai_confidence = self.build_draft(event)
+        if ai_confidence > 0:
+            safety_flags["ai_confidence"] = round(ai_confidence, 3)
         return DraftPost(
             event_id=event.id,
             platform="x",
@@ -59,6 +108,7 @@ class DraftingService:
             draft_text=draft_text,
             safety_flags=safety_flags,
             needs_review=safety_flags["needs_review"],
+            prompt_version=PROMPT_VERSION,
         )
 
     def _fallback_text(self, facts: dict) -> str:
@@ -115,6 +165,8 @@ class DraftingService:
         event_type = str(facts.get("event_class") or "")
         if event_type in {"rbi_policy", "macro_release"}:
             return self._macro_template(facts)
+        if event_type == "rbi_penalty":
+            return self._penalty_template(facts)
         if event_type in {"sebi_circular", "sebi_enforcement"}:
             return self._regulatory_template(facts)
         if event_type == "earnings":
@@ -146,6 +198,14 @@ class DraftingService:
             if "repo rate" in lowered or "monetary policy" in lowered:
                 return f"{headline}. Source: RBI."
         return f"{headline}. Source: {source_name}."
+
+    def _penalty_template(self, facts: dict) -> str | None:
+        headline = self._clean_headline(facts)
+        if not headline:
+            return None
+        if not headline.startswith("RBI"):
+            return f"RBI {headline[0].lower() + headline[1:]}. Source: RBI."
+        return f"{headline}. Source: RBI."
 
     def _regulatory_template(self, facts: dict) -> str | None:
         headline = self._clean_headline(facts)

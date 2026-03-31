@@ -771,3 +771,43 @@ input {
     align-items: flex-start;
   }
 }
+
+/* ── Character count ─────────────────────────────────────────── */
+.char-count {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.15s;
+}
+.char-count-ok     { color: var(--success); }
+.char-count-warn   { color: var(--warning); }
+.char-count-danger { color: var(--danger); }
+.char-count-over   { color: var(--danger); font-weight: 600; }
+
+/* ── Tweet preview bubble ────────────────────────────────────── */
+.tweet-preview {
+  margin-top: 4px;
+}
+.tweet-preview-bubble {
+  margin-top: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel-alt);
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 48px;
+}
+
+/* ── Source document link ────────────────────────────────────── */
+.source-link {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.source-link:hover {
+  text-decoration: underline;
+}

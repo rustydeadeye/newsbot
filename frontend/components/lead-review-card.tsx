@@ -32,6 +32,16 @@ export function LeadReviewCard({
           <div className="section-label">What happened</div>
           <h3>{String(item.event?.summary_facts?.headline ?? item.draft?.draft_text ?? "Untitled review item")}</h3>
         </div>
+        {item.event?.summary_facts?.document_url || item.event?.summary_facts?.source_url ? (
+          <a
+            className="source-link"
+            href={String(item.event.summary_facts.document_url ?? item.event.summary_facts.source_url)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View source document →
+          </a>
+        ) : null}
         <div className="lead-review-grid">
           <div className="lead-review-block">
             <div className="section-label">Why this needs review</div>

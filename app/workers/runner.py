@@ -2,6 +2,7 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.pipeline import draft_pending_events, normalize_pending_items, publish_ready_jobs, queue_publish_jobs
 from app.services.ingestion.service import IngestionService
+from app.services.publishing.engagement import fetch_pending_engagement
 
 
 def run_cycle() -> dict[str, int | dict[str, int]]:
@@ -19,3 +20,8 @@ def run_cycle() -> dict[str, int | dict[str, int]]:
             "queued": queued,
             "posted": posted,
         }
+
+
+def run_engagement_fetch() -> int:
+    with SessionLocal() as db:
+        return fetch_pending_engagement(db)

@@ -5,11 +5,15 @@ import { EmptyState } from "@/components/empty-state";
 import { GuidePanel } from "@/components/guide-panel";
 import { KpiCard } from "@/components/kpi-card";
 import { LeadReviewCard } from "@/components/lead-review-card";
+import { PipelineRunButton } from "@/components/pipeline-run-button";
 import { QueueReviewRow } from "@/components/queue-review-row";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
+import { ReviewItem } from "@/lib/types";
 import { requireServerViewer } from "@/lib/viewer";
+
+export const revalidate = 30;
 
 export default async function HomePage() {
   const { viewer, accessToken } = await requireServerViewer();
@@ -48,6 +52,12 @@ export default async function HomePage() {
     const disabledSources = sources.filter((source) => !source.enabled).length;
     const topFailure = jobs.find((job) => job.status === "failed");
 
+    // Sort: overdue first, then by importance score descending
+    const sortedQueue = [...queue].sort((a: ReviewItem, b: ReviewItem) => {
+      if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+      return (b.event?.importance_score ?? 0) - (a.event?.importance_score ?? 0);
+    });
+
     return (
       <div className="page-grid">
         <ShellHeader
@@ -58,6 +68,7 @@ export default async function HomePage() {
           freshnessLabel="Publishing, source, and review status"
           actions={
             <>
+              <PipelineRunButton />
               <Link className="button" href="/jobs">
                 Open Publishing
               </Link>
@@ -113,7 +124,7 @@ export default async function HomePage() {
                   ? `${blocked} guardrail hold${blocked === 1 ? "" : "s"} and ${queue.length - blocked} standard review item${queue.length - blocked === 1 ? "" : "s"} are waiting.`
                   : "No review backlog is building right now."}
               </div>
-              {queue.slice(0, 4).map((item) => (
+              {sortedQueue.slice(0, 4).map((item) => (
                 <QueueReviewRow key={item.id} item={item} />
               ))}
             </div>
@@ -159,11 +170,19 @@ export default async function HomePage() {
   const highPriority = queue.filter((item) => (item.event?.importance_score ?? 0) >= 85).length;
   const blocked = queue.filter((item) => item.reason.includes("guardrail")).length;
   const ready = queue.filter((item) => item.draft).length;
-  const leadItem = queue[0] ?? null;
-  const secondaryItems = queue.slice(1, 5);
+
+  // Sort: overdue first, then by importance score descending
+  const sortedCustomerQueue = [...queue].sort((a: ReviewItem, b: ReviewItem) => {
+    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+    return (b.event?.importance_score ?? 0) - (a.event?.importance_score ?? 0);
+  });
+  const leadItem = sortedCustomerQueue[0] ?? null;
+  const secondaryItems = sortedCustomerQueue.slice(1, 5);
+  const pageTitle = queue.length > 0 ? `(${queue.length}) Newsbot` : "Newsbot";
 
   return (
     <div className="page-grid">
+      <title>{pageTitle}</title>
       <ShellHeader
         eyebrow="Customer Review Workspace"
         title="Home"

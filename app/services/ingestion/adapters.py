@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
 import logging
+import random
 import re
+import time
 from urllib.parse import urljoin
 from xml.etree import ElementTree
 
@@ -15,6 +17,53 @@ from app.models.source import Source
 from app.services.ingestion.base import FetchedItem
 
 logger = logging.getLogger(__name__)
+
+_RETRY_BACKOFF = [2.0, 8.0]  # seconds between attempts 1→2, 2→3
+_RETRY_JITTER = 0.2           # ±20% jitter
+
+
+def _should_retry(exc: Exception) -> bool:
+    if isinstance(exc, httpx.RequestError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return False
+
+
+def _http_get_with_retry(url: str, **kwargs) -> httpx.Response:
+    last_exc: Exception | None = None
+    for attempt, backoff in enumerate([0.0] + _RETRY_BACKOFF):
+        if backoff > 0:
+            jitter = backoff * _RETRY_JITTER * (2 * random.random() - 1)
+            time.sleep(backoff + jitter)
+            logger.info("Retrying fetch (attempt %d): %s", attempt + 1, url)
+        try:
+            response = httpx.get(url, **kwargs)
+            response.raise_for_status()
+            return response
+        except Exception as exc:
+            last_exc = exc
+            if not _should_retry(exc):
+                raise
+    raise last_exc  # type: ignore[misc]
+
+
+def _client_get_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
+    last_exc: Exception | None = None
+    for attempt, backoff in enumerate([0.0] + _RETRY_BACKOFF):
+        if backoff > 0:
+            jitter = backoff * _RETRY_JITTER * (2 * random.random() - 1)
+            time.sleep(backoff + jitter)
+            logger.info("Retrying fetch (attempt %d): %s", attempt + 1, url)
+        try:
+            response = client.get(url, **kwargs)
+            response.raise_for_status()
+            return response
+        except Exception as exc:
+            last_exc = exc
+            if not _should_retry(exc):
+                raise
+    raise last_exc  # type: ignore[misc]
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -78,8 +127,7 @@ class NSECorporateFilingsAdapter(SourceAdapter):
         try:
             with httpx.Client(headers=DEFAULT_HEADERS, timeout=20.0, follow_redirects=True) as client:
                 client.get("https://www.nseindia.com")
-                response = client.get(self.source.base_url)
-                response.raise_for_status()
+                response = _client_get_with_retry(client, self.source.base_url)
         except httpx.HTTPStatusError as exc:
             logger.warning("NSE fetch returned HTTP %s", exc.response.status_code)
             raise
@@ -134,8 +182,7 @@ class NSECorporateFilingsAdapter(SourceAdapter):
 class MOSPIPressReleaseAdapter(SourceAdapter):
     def fetch(self) -> list[FetchedItem]:
         try:
-            response = httpx.get(self.source.base_url, headers=DEFAULT_HEADERS, timeout=20.0, follow_redirects=True)
-            response.raise_for_status()
+            response = _http_get_with_retry(self.source.base_url, headers=DEFAULT_HEADERS, timeout=20.0, follow_redirects=True)
         except httpx.HTTPStatusError as exc:
             logger.warning("MOSPI fetch returned HTTP %s", exc.response.status_code)
             raise
@@ -169,6 +216,44 @@ class MOSPIPressReleaseAdapter(SourceAdapter):
         return items
 
 
+class SEBIRSSAdapter(SourceAdapter):
+    """Handles SEBI's RSS feed which has a non-standard date format and URL-based document types."""
+
+    def fetch(self) -> list[FetchedItem]:
+        try:
+            response = _http_get_with_retry(self.source.base_url, headers=DEFAULT_HEADERS, timeout=20.0, follow_redirects=True)
+        except httpx.HTTPStatusError as exc:
+            logger.warning("SEBI RSS returned HTTP %s", exc.response.status_code)
+            raise
+        except httpx.RequestError as exc:
+            logger.warning("SEBI RSS request failed (%s)", type(exc).__name__)
+            raise
+
+        root = ElementTree.fromstring(response.text)
+        items: list[FetchedItem] = []
+        for node in root.findall(".//item"):
+            title = (node.findtext("title") or "").strip()
+            link = (node.findtext("link") or "").strip()
+            guid = (node.findtext("guid") or link or title).strip()
+            pub_date_raw = node.findtext("pubDate")
+            description = node.findtext("description")
+            doc_type = _sebi_doc_type_from_url(link)
+            payload = _rss_payload(title, link, guid, pub_date_raw, description)
+            payload["sebi_document_type"] = doc_type
+            if doc_type:
+                payload["release_type"] = doc_type
+            items.append(
+                FetchedItem(
+                    external_id=guid,
+                    url=link,
+                    title=title,
+                    published_at=_parse_sebi_date(pub_date_raw),
+                    raw_payload=payload,
+                )
+            )
+        return items
+
+
 class PlaceholderHtmlAdapter(SourceAdapter):
     def fetch(self) -> list[FetchedItem]:
         return []
@@ -181,16 +266,53 @@ def get_adapter(source: Source) -> SourceAdapter:
         return NSECorporateFilingsAdapter(source)
     if source.name == "mospi_releases":
         return MOSPIPressReleaseAdapter(source)
+    if source.name == "sebi_releases":
+        return SEBIRSSAdapter(source)
     if source.type == "rss":
         return RSSSourceAdapter(source)
     logger.warning("No adapter implemented for source=%s type=%s; no items will be fetched", source.name, source.type)
     return PlaceholderHtmlAdapter(source)
 
 
+def _parse_sebi_date(value: str | None) -> datetime | None:
+    """Parse SEBI's non-standard pubDate: '30 Mar, 2026 +0530' → aware datetime."""
+    if not value:
+        return None
+    # Normalize: strip comma after day, reformat timezone "+0530" → "+05:30"
+    normalized = re.sub(
+        r"(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})\s+([+-]\d{2})(\d{2})",
+        r"\1 \2 \3 \4:\5",
+        value.strip(),
+    )
+    for fmt in ("%d %b %Y %z", "%d %B %Y %z"):
+        try:
+            return datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+    # Fallback to generic parser
+    result = _parse_datetime(value)
+    if result is None:
+        logger.warning("Could not parse SEBI date: %r", value)
+    return result
+
+
+def _sebi_doc_type_from_url(url: str) -> str | None:
+    """Return a SEBI document type string based on the URL path."""
+    lowered = url.lower()
+    if "/enforcement/" in lowered:
+        return "sebi_enforcement"
+    if "/legal/circulars/" in lowered or "/circulars/" in lowered:
+        return "sebi_circular"
+    if "/media-and-notifications/press-releases/" in lowered:
+        return "sebi_press_release"
+    if "/legal/framework/" in lowered or "/legal/regulations/" in lowered:
+        return "sebi_regulation"
+    return None
+
+
 def _fetch_rss_items(feed_url: str) -> list[FetchedItem]:
     try:
-        response = httpx.get(feed_url, headers=DEFAULT_HEADERS, timeout=20.0, follow_redirects=True)
-        response.raise_for_status()
+        response = _http_get_with_retry(feed_url, headers=DEFAULT_HEADERS, timeout=20.0, follow_redirects=True)
     except httpx.HTTPStatusError as exc:
         logger.warning("RSS feed returned HTTP %s: %s", exc.response.status_code, feed_url)
         raise

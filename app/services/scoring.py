@@ -24,6 +24,7 @@ SOURCE_CREDIBILITY_BONUS = {
 
 EVENT_BASE = {
     "rbi_policy": 95,
+    "rbi_penalty": 72,
     "sebi_circular": 85,
     "sebi_enforcement": 85,
     "earnings": 70,

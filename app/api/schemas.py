@@ -1,3 +1,6 @@
+from datetime import datetime
+from enum import Enum
+
 from pydantic import BaseModel, Field
 
 
@@ -12,9 +15,15 @@ class DraftRejectAction(BaseModel):
     reason: str = Field(min_length=3)
 
 
+class ReviewStatus(str, Enum):
+    open = "open"
+    resolved = "resolved"
+    rejected = "rejected"
+
+
 class ReviewResolveAction(BaseModel):
     reviewer: str | None = None
-    status: str = Field(default="resolved")
+    status: ReviewStatus = ReviewStatus.resolved
 
 
 class CreatorSettingsUpdate(BaseModel):
@@ -25,7 +34,15 @@ class CreatorSettingsUpdate(BaseModel):
     max_posts_per_hour: int | None = Field(default=None, ge=1, le=60)
     watchlist: list[str] | None = None
     blocked_phrases: list[str] | None = None
+    timezone: str | None = None
+    posting_window_start: int | None = Field(default=None, ge=0, le=23)
+    posting_window_end: int | None = Field(default=None, ge=0, le=23)
+    openai_api_key: str | None = None
 
 
 class PublishJobRetryAction(BaseModel):
-    scheduled_for: str | None = None
+    scheduled_for: datetime | None = None
+
+
+class SourceUpdate(BaseModel):
+    enabled: bool

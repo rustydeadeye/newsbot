@@ -1,7 +1,9 @@
 import { ApiErrorPanel } from "@/components/api-error-panel";
+import { ConnectXButton } from "@/components/connect-x-button";
 import { SettingsForm } from "@/components/settings-form";
 import { SettingsSection } from "@/components/settings-section";
 import { ShellHeader } from "@/components/shell-header";
+import { SourceToggle } from "@/components/source-toggle";
 import { StatusPanel } from "@/components/status-panel";
 import { getCreatorSettings, getSources } from "@/lib/api";
 import { CreatorSettings, SourceSummary } from "@/lib/types";
@@ -58,6 +60,15 @@ export default async function SettingsPage() {
         </SettingsSection>
         {role === "admin" ? (
           <SettingsSection
+            eyebrow="Publishing account"
+            title="X (Twitter) account"
+            description="Connect the X account that Newsbot will post from. Tokens are stored securely and refreshed automatically."
+          >
+            <ConnectXButton connected={settings.x_connected} />
+          </SettingsSection>
+        ) : null}
+        {role === "admin" ? (
+          <SettingsSection
             eyebrow="System-owned controls"
             title="Source readiness and operational coverage"
             description="These controls stay admin-only because they affect ingestion, monitoring, and delivery confidence."
@@ -70,15 +81,7 @@ export default async function SettingsPage() {
             />
             <div className="stack">
               {sources.map((source) => (
-                <div key={source.id} className="row space source-row">
-                  <div>
-                    <div>{source.name}</div>
-                    <div className="card-subtle">
-                      {source.type} | poll {source.poll_interval_sec}s
-                    </div>
-                  </div>
-                  <span className={source.enabled ? "pill" : "pill danger"}>{source.enabled ? "enabled" : "disabled"}</span>
-                </div>
+                <SourceToggle key={source.id} source={source} />
               ))}
             </div>
           </SettingsSection>

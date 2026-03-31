@@ -1,7 +1,9 @@
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from app.models.review import ReviewQueueItem
+from app.models.review import ReviewQueueItem, _DEFAULT_SLA_HOURS
 
 
 class ReviewQueueRepository:
@@ -12,7 +14,18 @@ class ReviewQueueRepository:
         stmt: Select[tuple[ReviewQueueItem]] = select(ReviewQueueItem).where(ReviewQueueItem.status == "open")
         return list(self.db.scalars(stmt))
 
+    def list_overdue(self) -> list[ReviewQueueItem]:
+        now = datetime.now(timezone.utc)
+        stmt = select(ReviewQueueItem).where(
+            ReviewQueueItem.status == "open",
+            ReviewQueueItem.sla_due_at.is_not(None),
+            ReviewQueueItem.sla_due_at < now,
+        )
+        return list(self.db.scalars(stmt))
+
     def add(self, item: ReviewQueueItem) -> ReviewQueueItem:
+        if item.sla_due_at is None:
+            item.sla_due_at = datetime.now(timezone.utc) + timedelta(hours=_DEFAULT_SLA_HOURS)
         self.db.add(item)
         self.db.flush()
         return item

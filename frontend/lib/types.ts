@@ -10,6 +10,8 @@ export type EventSummary = {
   dedupe_key?: string;
   summary_facts: Record<string, unknown>;
   status?: string;
+  draft_id: number | null;
+  draft_status: string | null;
 };
 
 export type DraftSummary = {
@@ -30,6 +32,8 @@ export type ReviewItem = {
   reason: string;
   assigned_to: string | null;
   status: string;
+  sla_due_at: string | null;
+  overdue: boolean;
   event: EventSummary | null;
   draft: DraftSummary | null;
 };
@@ -63,6 +67,8 @@ export type PublishLog = {
   platform_post_id: string | null;
   posted_at: string | null;
   response_payload: Record<string, unknown>;
+  engagement_stats: Record<string, unknown>;
+  engagement_fetched_at: string | null;
   created_at: string | null;
 };
 
@@ -75,6 +81,11 @@ export type CreatorSettings = {
   max_posts_per_hour: number;
   watchlist: string[];
   blocked_phrases: string[];
+  timezone: string;
+  posting_window_start: number | null;
+  posting_window_end: number | null;
+  x_connected: boolean;
+  openai_configured: boolean;
 };
 
 export type AuthMeResponse = {

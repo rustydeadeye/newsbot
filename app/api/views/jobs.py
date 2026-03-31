@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -37,6 +35,22 @@ def list_publish_logs(limit: int = Query(default=50, le=200), db: Session = Depe
     return [log.to_dict() for log in PublishLogRepository(db).list_recent(limit=limit)]
 
 
+@router.post("/{job_id}/cancel")
+def cancel_publish_job(job_id: int, db: Session = Depends(get_db)) -> dict:
+    job_repo = PublishJobRepository(db)
+    job = job_repo.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Publish job not found")
+
+    if job.status not in ("queued", "skipped"):
+        raise HTTPException(status_code=409, detail="Only queued or skipped jobs can be cancelled")
+
+    job.status = "cancelled"
+    job.result_message = "cancelled_by_admin"
+    db.commit()
+    return job.to_dict()
+
+
 @router.post("/{job_id}/retry")
 def retry_publish_job(job_id: int, action: PublishJobRetryAction, db: Session = Depends(get_db)) -> dict:
     job_repo = PublishJobRepository(db)
@@ -44,9 +58,12 @@ def retry_publish_job(job_id: int, action: PublishJobRetryAction, db: Session = 
     if job is None:
         raise HTTPException(status_code=404, detail="Publish job not found")
 
+    if job.status not in ("failed", "skipped"):
+        raise HTTPException(status_code=409, detail="Only failed or skipped jobs can be retried")
+
     job.status = "queued"
     job.last_error = None
     if action.scheduled_for:
-        job.scheduled_for = datetime.fromisoformat(action.scheduled_for)
+        job.scheduled_for = action.scheduled_for
     db.commit()
     return job.to_dict()
