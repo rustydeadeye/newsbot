@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { generateDrafts } from "@/lib/api";
 
-export function GenerateDraftsButton() {
+export function GenerateDraftsButton({ label = "Generate drafts now" }: { label?: string }) {
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -29,7 +29,7 @@ export function GenerateDraftsButton() {
   return (
     <div className="stack">
       <button className="button" disabled={isPending} onClick={start} type="button">
-        {isPending ? "Starting…" : "Generate drafts now"}
+        {isPending ? "Starting…" : label}
       </button>
       {message ? <div className="card-subtle">{message}</div> : null}
     </div>

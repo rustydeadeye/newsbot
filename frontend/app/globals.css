@@ -120,6 +120,16 @@ input {
   box-shadow: var(--shadow-soft);
 }
 
+.onboarding-sidebar-note {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+}
+
 .role-label,
 .eyebrow,
 .status-label,
@@ -245,6 +255,10 @@ input {
   gap: 14px;
 }
 
+.metrics.metrics-compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .panel,
 .metric,
 .card,
@@ -332,6 +346,13 @@ input {
   align-items: start;
 }
 
+.onboarding-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.25fr);
+  gap: 18px;
+  align-items: start;
+}
+
 .admin-secondary-grid {
   align-items: start;
 }
@@ -371,6 +392,19 @@ input {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
 }
 
+.queue-review-row-link {
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.queue-review-row-link:hover {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-soft);
+}
+
 .publish-row.failed {
   border-color: rgba(180, 66, 53, 0.22);
   background: linear-gradient(180deg, rgba(255, 246, 245, 0.98), rgba(255, 255, 255, 0.98));
@@ -405,6 +439,11 @@ input {
 .pill.danger {
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+.pill.subtle {
+  color: var(--muted);
+  background: rgba(19, 32, 54, 0.06);
 }
 
 .headline {
@@ -479,6 +518,39 @@ input {
   min-height: 0;
 }
 
+.compact-select {
+  min-height: 0;
+  height: 48px;
+  resize: none;
+}
+
+.token-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.token-editor-input {
+  min-height: 92px;
+}
+
+.token-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.token-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: white;
+  color: var(--ink);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
 .actions {
   display: flex;
   gap: 10px;
@@ -549,6 +621,10 @@ input {
   align-items: start;
   min-height: 180px;
   place-content: center start;
+}
+
+.degraded-state {
+  background: linear-gradient(180deg, rgba(255, 248, 237, 0.96), rgba(255, 255, 255, 0.98));
 }
 
 .source-row {
@@ -637,6 +713,13 @@ input {
   gap: 18px;
 }
 
+.draft-workbench-selected {
+  border-color: rgba(13, 91, 215, 0.22);
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px rgba(13, 91, 215, 0.08);
+}
+
 .draft-workbench-main,
 .draft-workbench-editor {
   display: grid;
@@ -701,12 +784,70 @@ input {
   border: 1px solid rgba(13, 91, 215, 0.08);
 }
 
+.onboarding-intro,
+.onboarding-wizard {
+  display: grid;
+  gap: 18px;
+}
+
+.onboarding-progress-list {
+  display: grid;
+  gap: 10px;
+}
+
+.onboarding-progress-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+}
+
+.onboarding-progress-item-current {
+  border-color: rgba(13, 91, 215, 0.18);
+  background: linear-gradient(180deg, rgba(245, 249, 255, 0.98), rgba(255, 255, 255, 0.98));
+}
+
+.onboarding-progress-item-done {
+  border-color: rgba(24, 116, 93, 0.15);
+  background: linear-gradient(180deg, rgba(243, 251, 248, 0.96), rgba(255, 255, 255, 0.98));
+}
+
+.onboarding-step-hero {
+  display: grid;
+  gap: 8px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(245, 249, 255, 0.98), rgba(255, 255, 255, 0.98));
+  border: 1px solid rgba(13, 91, 215, 0.1);
+}
+
+.onboarding-step-card {
+  gap: 14px;
+}
+
+.onboarding-primary-cta {
+  width: 100%;
+  justify-content: center;
+}
+
+.onboarding-message {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(13, 91, 215, 0.06);
+  border: 1px solid rgba(13, 91, 215, 0.08);
+}
+
 @media (max-width: 1180px) {
   .command-center-grid,
   .customer-home-grid,
   .draft-workbench,
   .publishing-layout,
-  .settings-layout {
+  .settings-layout,
+  .onboarding-layout {
     grid-template-columns: 1fr;
   }
 

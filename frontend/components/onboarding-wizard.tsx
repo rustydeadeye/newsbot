@@ -6,47 +6,64 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { completeOnboarding, updateOnboardingOpenAI, updateOnboardingProfile } from "@/lib/api";
 import { OnboardingStatus } from "@/lib/types";
 import { ConnectXButton } from "@/components/connect-x-button";
+import { TokenEditor } from "@/components/token-editor";
 
 type Step = "profile" | "openai" | "x" | "finish";
+const TONE_OPTIONS = ["Analyst", "Clear and direct", "Measured", "Concise"];
+const LANGUAGE_OPTIONS = ["English"];
 
-function parseCsv(value: string) {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
+const STEP_CONTENT: Record<Exclude<Step, "finish">, { number: string; title: string; description: string }> = {
+  profile: {
+    number: "Step 1",
+    title: "Set your profile and voice",
+    description: "Tell Newsbot how to present your workspace and which updates should matter most.",
+  },
+  openai: {
+    number: "Step 2",
+    title: "Unlock draft generation",
+    description: "Add your OpenAI key so Newsbot can create draft copy for your workspace.",
+  },
+  x: {
+    number: "Optional step",
+    title: "Connect X when you are ready",
+    description: "You can skip this for now and come back later before publishing workflows are enabled.",
+  },
+};
 
 export function OnboardingWizard({ status }: { status: OnboardingStatus }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
+  const [skipXForNow, setSkipXForNow] = useState(false);
   const [profile, setProfile] = useState({
     display_name: status.display_name ?? "",
     tone: status.tone,
     language: status.language,
-    watchlist: status.watchlist.join(", "),
-    blocked_phrases: status.blocked_phrases.join(", "),
+    watchlist: status.watchlist,
+    blocked_phrases: status.blocked_phrases,
   });
   const [openaiKey, setOpenaiKey] = useState("");
 
   const step: Step = useMemo(() => {
     if (!status.display_name) return "profile";
     if (!status.openai_configured) return "openai";
-    if (!status.x_connected && searchParams.get("x_connected") !== "1") return "x";
+    if (!status.x_connected && searchParams.get("x_connected") !== "1" && !skipXForNow) return "x";
     return "finish";
-  }, [searchParams, status.display_name, status.openai_configured, status.x_connected]);
+  }, [searchParams, skipXForNow, status.display_name, status.openai_configured, status.x_connected]);
 
   function saveProfile() {
+    setMessage(null);
     startTransition(async () => {
       try {
         await updateOnboardingProfile({
           display_name: profile.display_name.trim(),
           tone: profile.tone,
           language: profile.language,
-          watchlist: parseCsv(profile.watchlist),
-          blocked_phrases: parseCsv(profile.blocked_phrases),
+          watchlist: profile.watchlist,
+          blocked_phrases: profile.blocked_phrases,
         });
+        setMessage("Profile saved. You can move to the next step.");
         router.refresh();
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Failed to save profile");
@@ -55,10 +72,12 @@ export function OnboardingWizard({ status }: { status: OnboardingStatus }) {
   }
 
   function saveOpenAI() {
+    setMessage(null);
     startTransition(async () => {
       try {
         await updateOnboardingOpenAI({ openai_api_key: openaiKey.trim() });
         setOpenaiKey("");
+        setMessage("OpenAI key saved. Draft generation is now unlocked.");
         router.refresh();
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Failed to save OpenAI key");
@@ -67,6 +86,7 @@ export function OnboardingWizard({ status }: { status: OnboardingStatus }) {
   }
 
   function finish() {
+    setMessage(null);
     startTransition(async () => {
       try {
         await completeOnboarding();
@@ -78,61 +98,111 @@ export function OnboardingWizard({ status }: { status: OnboardingStatus }) {
     });
   }
 
+  const progressItems = [
+    {
+      key: "profile",
+      label: "Profile",
+      detail: status.display_name ? "Complete" : "Required",
+      state: status.display_name ? "done" : step === "profile" ? "current" : "upcoming",
+    },
+    {
+      key: "openai",
+      label: "OpenAI",
+      detail: status.openai_configured ? "Complete" : "Required",
+      state: status.openai_configured ? "done" : step === "openai" ? "current" : "upcoming",
+    },
+    {
+      key: "x",
+      label: "X connection",
+      detail: status.x_connected ? "Connected" : "Optional",
+      state: status.x_connected ? "done" : step === "x" ? "current" : step === "finish" ? "upcoming" : "upcoming",
+    },
+  ] as const;
+
+  const activeStepMeta = step === "finish" ? null : STEP_CONTENT[step];
+
   return (
-    <div className="panel stack">
-      <div className="section-title">Customer onboarding</div>
-      <div className="card-subtle">
-        Complete these steps once so Newsbot can generate customer-specific drafts for your workspace.
-      </div>
-      <div className="workspace-list">
-        <div className="workspace-list-row">
-          <span>1. Profile</span>
-          <strong>{status.display_name ? "Complete" : "Required"}</strong>
-        </div>
-        <div className="workspace-list-row">
-          <span>2. OpenAI</span>
-          <strong>{status.openai_configured ? "Complete" : "Required"}</strong>
-        </div>
-        <div className="workspace-list-row">
-          <span>3. X connection</span>
-          <strong>{status.x_connected ? "Connected" : "Optional for now"}</strong>
+    <div className="panel onboarding-wizard">
+      <div className="onboarding-progress">
+        <div className="section-title">Setup progress</div>
+        <div className="onboarding-progress-list">
+          {progressItems.map((item) => (
+            <div key={item.key} className={`onboarding-progress-item onboarding-progress-item-${item.state}`}>
+              <div>
+                <div className="field-label">{item.label}</div>
+                <div className="card-subtle">{item.detail}</div>
+              </div>
+              <span className={item.state === "done" ? "pill" : item.state === "current" ? "pill warn" : "pill subtle"}>
+                {item.state === "done" ? "Done" : item.state === "current" ? "Current" : "Next"}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
+      {activeStepMeta ? (
+        <div className="onboarding-step-hero">
+          <div className="eyebrow">{activeStepMeta.number}</div>
+          <div className="section-hero-title">{activeStepMeta.title}</div>
+          <p className="card-subtle">{activeStepMeta.description}</p>
+        </div>
+      ) : null}
+
       {step === "profile" ? (
-        <div className="stack">
+        <div className="stack onboarding-step-card">
           <label>
             <span className="field-label">Display name</span>
-            <input className="editor" value={profile.display_name} onChange={(event) => setProfile({ ...profile, display_name: event.target.value })} />
+            <input className="editor compact" value={profile.display_name} onChange={(event) => setProfile({ ...profile, display_name: event.target.value })} placeholder="How should Newsbot refer to you?" />
           </label>
           <label>
             <span className="field-label">Tone</span>
-            <input className="editor" value={profile.tone} onChange={(event) => setProfile({ ...profile, tone: event.target.value })} />
+            <select className="editor compact-select" value={profile.tone} onChange={(event) => setProfile({ ...profile, tone: event.target.value })}>
+              {TONE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             <span className="field-label">Language</span>
-            <input className="editor" value={profile.language} onChange={(event) => setProfile({ ...profile, language: event.target.value })} />
+            <select className="editor compact-select" value={profile.language} onChange={(event) => setProfile({ ...profile, language: event.target.value })}>
+              {LANGUAGE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
           </label>
-          <label>
-            <span className="field-label">Watchlist</span>
-            <textarea className="editor" value={profile.watchlist} onChange={(event) => setProfile({ ...profile, watchlist: event.target.value })} />
-          </label>
-          <label>
-            <span className="field-label">Blocked phrases</span>
-            <textarea className="editor" value={profile.blocked_phrases} onChange={(event) => setProfile({ ...profile, blocked_phrases: event.target.value })} />
-          </label>
-          <button className="button" disabled={isPending || !profile.display_name.trim()} onClick={saveProfile} type="button">
-            {isPending ? "Saving…" : "Save profile"}
+          <TokenEditor
+            label="Watchlist"
+            value={profile.watchlist}
+            onChange={(watchlist) => setProfile({ ...profile, watchlist })}
+            placeholder="Add companies, tickers, or topics"
+            help="Examples: RBI, HDFC Bank, mutual funds, SEBI."
+          />
+          <TokenEditor
+            label="Blocked phrases"
+            value={profile.blocked_phrases}
+            onChange={(blocked_phrases) => setProfile({ ...profile, blocked_phrases })}
+            placeholder="Add terms you do not want in drafts"
+            help="Examples: unconfirmed, rumor, guaranteed."
+          />
+          <button className="button onboarding-primary-cta" disabled={isPending || !profile.display_name.trim()} onClick={saveProfile} type="button">
+            {isPending ? "Saving…" : "Save and continue"}
           </button>
         </div>
       ) : null}
 
       {step === "openai" ? (
-        <div className="stack">
+        <div className="stack onboarding-step-card">
+          <div className="card-subtle">
+            Your OpenAI key unlocks draft generation for this workspace. Newsbot uses it to prepare suggestions for review, and it stays stored securely.
+          </div>
           <label>
             <span className="field-label">OpenAI API key</span>
             <input
-              className="editor"
+              className="editor compact"
               type="password"
               value={openaiKey}
               onChange={(event) => setOpenaiKey(event.target.value)}
@@ -140,36 +210,46 @@ export function OnboardingWizard({ status }: { status: OnboardingStatus }) {
               autoComplete="off"
             />
           </label>
-          <button className="button" disabled={isPending || openaiKey.trim().length < 10} onClick={saveOpenAI} type="button">
-            {isPending ? "Saving…" : "Save OpenAI key"}
+          <button className="button onboarding-primary-cta" disabled={isPending || openaiKey.trim().length < 10} onClick={saveOpenAI} type="button">
+            {isPending ? "Saving…" : "Save and continue"}
           </button>
         </div>
       ) : null}
 
       {step === "x" ? (
-        <div className="stack">
+        <div className="stack onboarding-step-card">
           <div className="card-subtle">
-            Connecting X is optional during onboarding. You can skip it for now and still generate drafts, then come back before publishing workflows are enabled.
+            You can skip this for now, generate your first drafts, and come back later when you are ready to connect a publishing account.
           </div>
           <ConnectXButton connected={status.x_connected} nextPath="/onboarding" />
-          <button className="button secondary" disabled={isPending} onClick={() => router.refresh()} type="button">
+          <button
+            className="button secondary onboarding-primary-cta"
+            disabled={isPending}
+            onClick={() => {
+              setSkipXForNow(true);
+              setMessage("You can connect X later from Settings when you are ready.");
+            }}
+            type="button"
+          >
             Continue for now
           </button>
         </div>
       ) : null}
 
       {step === "finish" ? (
-        <div className="stack">
+        <div className="stack onboarding-step-card">
+          <div className="eyebrow">Setup complete</div>
+          <div className="section-hero-title">Your workspace is ready</div>
           <div className="card-subtle">
-            Your workspace is ready. You can generate customer-specific drafts now and connect X later if you want publishing-ready setup.
+            You will land on Home next, where you can generate your first drafts immediately. X can be connected later whenever you want to prepare for publishing.
           </div>
-          <button className="button" disabled={isPending} onClick={finish} type="button">
+          <button className="button onboarding-primary-cta" disabled={isPending} onClick={finish} type="button">
             {isPending ? "Finishing…" : "Enter workspace"}
           </button>
         </div>
       ) : null}
 
-      {message ? <div className="card-subtle">{message}</div> : null}
+      {message ? <div className="card-subtle onboarding-message">{message}</div> : null}
     </div>
   );
 }

@@ -42,11 +42,20 @@ export async function requireWorkspaceSession(): Promise<{
   viewer: ViewerProfile;
   accessToken: string;
   onboarding: OnboardingStatus | null;
+  onboardingError: string | null;
 }> {
   const auth = await requireServerViewer();
   if (!auth.viewer.role || auth.viewer.role !== "customer") {
-    return { ...auth, onboarding: null };
+    return { ...auth, onboarding: null, onboardingError: null };
   }
-  const onboarding = await getOnboardingStatus(auth.accessToken);
-  return { ...auth, onboarding };
+  try {
+    const onboarding = await getOnboardingStatus(auth.accessToken);
+    return { ...auth, onboarding, onboardingError: null };
+  } catch (error) {
+    return {
+      ...auth,
+      onboarding: null,
+      onboardingError: error instanceof Error ? error.message : "Failed to load onboarding state",
+    };
+  }
 }

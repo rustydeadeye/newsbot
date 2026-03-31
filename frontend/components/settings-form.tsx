@@ -3,16 +3,23 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+import { TokenEditor } from "@/components/token-editor";
 import { updateCreatorSettings } from "@/lib/api";
 import { ViewerRole } from "@/lib/session";
 import { CreatorSettings } from "@/lib/types";
 
+const TONE_OPTIONS = ["Analyst", "Clear and direct", "Measured", "Concise"];
+const LANGUAGE_OPTIONS = ["English"];
+type SettingsSection = "profile" | "generation" | "filters" | "full";
+
 export function SettingsForm({
   settings,
-  role
+  role,
+  section = "full",
 }: {
   settings: CreatorSettings;
   role: ViewerRole;
+  section?: SettingsSection;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -23,8 +30,8 @@ export function SettingsForm({
     tone: settings.tone,
     language: settings.language,
     max_posts_per_hour: String(settings.max_posts_per_hour),
-    watchlist: settings.watchlist.join(", "),
-    blocked_phrases: settings.blocked_phrases.join(", "),
+    watchlist: settings.watchlist,
+    blocked_phrases: settings.blocked_phrases,
     timezone: settings.timezone ?? "Asia/Kolkata",
     posting_window_start: settings.posting_window_start != null ? String(settings.posting_window_start) : "",
     posting_window_end: settings.posting_window_end != null ? String(settings.posting_window_end) : "",
@@ -40,8 +47,8 @@ export function SettingsForm({
           tone: form.tone,
           language: form.language,
           max_posts_per_hour: Number(form.max_posts_per_hour),
-          watchlist: form.watchlist.split(",").map((item) => item.trim()).filter(Boolean),
-          blocked_phrases: form.blocked_phrases.split(",").map((item) => item.trim()).filter(Boolean),
+          watchlist: form.watchlist,
+          blocked_phrases: form.blocked_phrases,
           ...(form.openai_api_key ? { openai_api_key: form.openai_api_key } : {}),
           ...(role === "admin" ? {
             timezone: form.timezone || undefined,
@@ -78,21 +85,42 @@ export function SettingsForm({
     });
   }
 
+  const showProfile = section === "profile" || section === "full";
+  const showGeneration = section === "generation" || section === "full";
+  const showFilters = section === "filters" || section === "full";
+  const showAdminFields = role === "admin" && section === "full";
+
   return (
     <div className="stack">
-      <label>
-        <span className="field-label">Display Name</span>
-        <input className="editor" value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} />
-      </label>
-      <label>
-        <span className="field-label">Tone</span>
-        <input className="editor" value={form.tone} onChange={(event) => setForm({ ...form, tone: event.target.value })} />
-      </label>
-      <label>
-        <span className="field-label">Language</span>
-        <input className="editor" value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value })} />
-      </label>
-      {role === "admin" ? (
+      {showProfile ? (
+        <>
+          <label>
+            <span className="field-label">Display Name</span>
+            <input className="editor compact" value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} />
+          </label>
+          <label>
+            <span className="field-label">Tone</span>
+            <select className="editor compact-select" value={form.tone} onChange={(event) => setForm({ ...form, tone: event.target.value })}>
+              {TONE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="field-label">Language</span>
+            <select className="editor compact-select" value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value })}>
+              {LANGUAGE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : null}
+      {showAdminFields ? (
         <>
           <label>
             <span className="field-label">Max Posts Per Hour</span>
@@ -115,34 +143,46 @@ export function SettingsForm({
           </label>
         </>
       ) : null}
-      <label>
-        <div className="row space">
-          <span className="field-label">OpenAI API Key</span>
-          <span className={settings.openai_configured ? "pill" : "pill danger"}>
-            {settings.openai_configured ? "configured" : "not set"}
-          </span>
-        </div>
-        <input
-          className="editor"
-          type="password"
-          value={form.openai_api_key}
-          onChange={(event) => setForm({ ...form, openai_api_key: event.target.value })}
-          placeholder={settings.openai_configured ? "Enter a new key to replace the existing one" : "sk-..."}
-          autoComplete="off"
-        />
-        <span className="card-subtle">Used for AI draft generation. Your key is stored securely and never exposed.</span>
-      </label>
-      <label>
-        <span className="field-label">Watchlist (comma-separated)</span>
-        <textarea className="editor" value={form.watchlist} onChange={(event) => setForm({ ...form, watchlist: event.target.value })} placeholder="e.g. RELIANCE, HDFC, SEBI" />
-      </label>
-      <label>
-        <span className="field-label">Blocked Phrases (comma-separated)</span>
-        <textarea className="editor" value={form.blocked_phrases} onChange={(event) => setForm({ ...form, blocked_phrases: event.target.value })} placeholder="e.g. rumour, unconfirmed" />
-      </label>
+      {showGeneration ? (
+        <label>
+          <div className="row space">
+            <span className="field-label">OpenAI API Key</span>
+            <span className={settings.openai_configured ? "pill" : "pill danger"}>
+              {settings.openai_configured ? "configured" : "not set"}
+            </span>
+          </div>
+          <input
+            className="editor compact"
+            type="password"
+            value={form.openai_api_key}
+            onChange={(event) => setForm({ ...form, openai_api_key: event.target.value })}
+            placeholder={settings.openai_configured ? "Enter a new key to replace the existing one" : "sk-..."}
+            autoComplete="off"
+          />
+          <span className="card-subtle">Used only for draft generation in your workspace. Your key stays hidden after save.</span>
+        </label>
+      ) : null}
+      {showFilters ? (
+        <>
+          <TokenEditor
+            label="Watchlist"
+            value={form.watchlist}
+            onChange={(watchlist) => setForm({ ...form, watchlist })}
+            placeholder="Add companies, tickers, or topics"
+            help="Newsbot uses this to prioritize the updates you care about most."
+          />
+          <TokenEditor
+            label="Blocked phrases"
+            value={form.blocked_phrases}
+            onChange={(blocked_phrases) => setForm({ ...form, blocked_phrases })}
+            placeholder="Add phrases to avoid in draft copy"
+            help="Use this to keep unwanted wording out of generated drafts."
+          />
+        </>
+      ) : null}
       <div className="actions">
         <button className="button" disabled={isPending} onClick={submit}>
-          {role === "admin" ? "Save Workspace Settings" : "Save My Settings"}
+          {role === "admin" ? "Save Workspace Settings" : "Save Section"}
         </button>
       </div>
       {message ? <div className="card-subtle">{message}</div> : null}

@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { ApiErrorPanel } from "@/components/api-error-panel";
+import { AdminApiErrorPanel } from "@/components/admin-api-error-panel";
+import { CustomerDegradedState } from "@/components/customer-degraded-state";
 import { EmptyState } from "@/components/empty-state";
 import { GuidePanel } from "@/components/guide-panel";
 import { ShellHeader } from "@/components/shell-header";
@@ -18,8 +19,24 @@ const DRAFT_STATUS_LABELS: Record<string, string> = {
 };
 
 export default async function EventsPage() {
-  const { viewer, accessToken, onboarding } = await requireWorkspaceSession();
+  const { viewer, accessToken, onboarding, onboardingError } = await requireWorkspaceSession();
   const role = viewer.role;
+  if (role === "customer" && onboardingError) {
+    return (
+      <div className="page-grid">
+        <ShellHeader
+          title="Events"
+          description="Track what Newsbot has identified across your coverage."
+          viewer={viewer}
+          freshnessLabel="Context and coverage view"
+        />
+        <CustomerDegradedState
+          title="We could not finish loading your workspace"
+          description="Newsbot had trouble loading your customer setup. Please try again shortly."
+        />
+      </div>
+    );
+  }
   if (role === "customer" && onboarding && !onboarding.onboarding_completed) {
     redirect("/onboarding");
   }
@@ -35,10 +52,17 @@ export default async function EventsPage() {
           viewer={viewer}
           freshnessLabel="Context and coverage view"
         />
-        <ApiErrorPanel
-          title="Events feed unavailable"
-          detail={error instanceof Error ? error.message : "Unknown API error"}
-        />
+        {role === "admin" ? (
+          <AdminApiErrorPanel
+            title="Events feed unavailable"
+            detail={error instanceof Error ? error.message : "Unknown API error"}
+          />
+        ) : (
+          <CustomerDegradedState
+            title="We could not load your update context right now"
+            description="Newsbot had trouble opening the latest story context. Please try again shortly."
+          />
+        )}
       </div>
     );
   }
@@ -93,7 +117,7 @@ export default async function EventsPage() {
                   {DRAFT_STATUS_LABELS[event.draft_status] ?? event.draft_status}
                 </span>
                 {event.draft_id && (event.draft_status === "draft" || event.draft_status === "approved") ? (
-                  <Link href="/drafts" className="source-link">Review Draft →</Link>
+                  <Link href={`/drafts?draftId=${event.draft_id}`} className="source-link">Review Draft →</Link>
                 ) : null}
               </div>
             ) : null}

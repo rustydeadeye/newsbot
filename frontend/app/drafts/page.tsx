@@ -1,28 +1,56 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { ApiErrorPanel } from "@/components/api-error-panel";
+import { ActiveRunRefresher } from "@/components/active-run-refresher";
+import { AdminApiErrorPanel } from "@/components/admin-api-error-panel";
+import { CustomerDegradedState } from "@/components/customer-degraded-state";
 import { EmptyState } from "@/components/empty-state";
+import { GenerateDraftsButton } from "@/components/generate-drafts-button";
 import { GuidePanel } from "@/components/guide-panel";
 import { QueueReviewRow } from "@/components/queue-review-row";
 import { RejectedDraftsSection } from "@/components/rejected-drafts-section";
 import { ReviewActions } from "@/components/review-actions";
 import { ShellHeader } from "@/components/shell-header";
-import { getRejectedDrafts, getReviewDrafts } from "@/lib/api";
+import { StatusPanel } from "@/components/status-panel";
+import { getCurrentPipelineRun, getRejectedDrafts, getReviewDrafts } from "@/lib/api";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
-export default async function DraftsPage() {
-  const { viewer, accessToken, onboarding } = await requireWorkspaceSession();
+export default async function DraftsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ draftId?: string }>;
+}) {
+  const { viewer, accessToken, onboarding, onboardingError } = await requireWorkspaceSession();
   const role = viewer.role;
+  const params = (await searchParams) ?? {};
+  const selectedDraftId = params.draftId ? Number(params.draftId) : null;
+  if (role === "customer" && onboardingError) {
+    return (
+      <div className="page-grid">
+        <ShellHeader
+          title="Drafts"
+          description="Edit generated copy before it moves to the next stage."
+          viewer={viewer}
+          freshnessLabel="Draft editing workspace"
+        />
+        <CustomerDegradedState
+          title="We could not finish loading your draft workspace"
+          description="Newsbot had trouble loading your customer setup. Please try again shortly."
+        />
+      </div>
+    );
+  }
   if (role === "customer" && onboarding && !onboarding.onboarding_completed) {
     redirect("/onboarding");
   }
   let drafts;
   let rejectedDrafts;
+  let currentRun = null;
   try {
-    [drafts, rejectedDrafts] = await Promise.all([
+    [drafts, rejectedDrafts, currentRun] = await Promise.all([
       getReviewDrafts(accessToken),
       getRejectedDrafts(accessToken),
+      role === "customer" ? getCurrentPipelineRun(accessToken) : Promise.resolve(null),
     ]);
   } catch (error) {
     return (
@@ -33,16 +61,33 @@ export default async function DraftsPage() {
           viewer={viewer}
           freshnessLabel="Draft editing workspace"
         />
-        <ApiErrorPanel
-          title="Draft review unavailable"
-          detail={error instanceof Error ? error.message : "Unknown API error"}
-        />
+        {role === "admin" ? (
+          <AdminApiErrorPanel
+            title="Draft review unavailable"
+            detail={error instanceof Error ? error.message : "Unknown API error"}
+          />
+        ) : (
+          <CustomerDegradedState
+            title="We could not load your drafts right now"
+            description="Newsbot had trouble opening your draft workspace. Please try again shortly."
+          />
+        )}
       </div>
     );
   }
 
+  const isActiveRun = currentRun?.status === "queued" || currentRun?.status === "running";
+  const sortedDrafts = selectedDraftId
+    ? [...drafts].sort((a, b) => {
+        if (a.id === selectedDraftId) return -1;
+        if (b.id === selectedDraftId) return 1;
+        return 0;
+      })
+    : drafts;
+
   return (
     <div className="page-grid">
+      <ActiveRunRefresher active={isActiveRun} />
       <ShellHeader
         eyebrow="Draft Editing Workspace"
         title="Drafts"
@@ -54,6 +99,13 @@ export default async function DraftsPage() {
         viewer={viewer}
         freshnessLabel={role === "admin" ? "Operational editing mode" : "Customer editing mode"}
       />
+      {role === "customer" && isActiveRun ? (
+        <StatusPanel
+          eyebrow="Generation status"
+          title={currentRun?.status === "queued" ? "Preparing drafts" : "Generating drafts"}
+          description="Newsbot is still preparing new drafts. This page will refresh automatically when more review items are ready."
+        />
+      ) : null}
       <GuidePanel
         eyebrow="Draft workspace"
         title={role === "admin" ? "Operational editing surface" : "Your content review surface"}
@@ -64,15 +116,19 @@ export default async function DraftsPage() {
         }
       />
       <div className="draft-list">
-        {drafts.length === 0 ? (
+        {sortedDrafts.length === 0 ? (
           <EmptyState
-            title="No drafts need review"
-            description="When Newsbot needs help refining copy, those drafts will appear here."
-            action={<Link href="/events" className="button secondary">View Events</Link>}
+            title={role === "customer" ? "No drafts are ready yet" : "No drafts need review"}
+            description={
+              role === "customer"
+                ? "Generate drafts from the latest updates or come back when new review items are ready."
+                : "When Newsbot needs help refining copy, those drafts will appear here."
+            }
+            action={role === "customer" ? <GenerateDraftsButton /> : <Link href="/events" className="button secondary">View Events</Link>}
           />
         ) : null}
-        {drafts.map((draft) => (
-          <div key={draft.id} className="draft-workbench">
+        {sortedDrafts.map((draft) => (
+          <div key={draft.id} className={draft.id === selectedDraftId ? "draft-workbench draft-workbench-selected" : "draft-workbench"}>
             <div className="draft-workbench-main">
               <QueueReviewRow
                 item={{
@@ -86,6 +142,8 @@ export default async function DraftsPage() {
                   event: draft.event ?? null,
                   draft
                 }}
+                href={`/drafts?draftId=${draft.id}`}
+                role={role}
               />
               <div className="draft-workbench-context">
                 <div className="lead-review-block">
@@ -105,9 +163,11 @@ export default async function DraftsPage() {
                 <div className="lead-review-block">
                   <div className="section-label">Editing mode</div>
                   <div className="card-subtle">
-                    {draft.needs_review
-                      ? "Use this workspace for a deliberate pass before approving."
-                      : "This draft has already moved out of the live review path."}
+                    {draft.id === selectedDraftId
+                      ? "You opened this draft from Home. Keep refining here until you are ready to approve or reject it."
+                      : draft.needs_review
+                        ? "Use this workspace for a deliberate pass before approving."
+                        : "This draft has already moved out of the live review path."}
                   </div>
                 </div>
               </div>

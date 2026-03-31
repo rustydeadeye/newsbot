@@ -11,6 +11,10 @@ type FetchJsonOptions = RequestInit & {
   accessToken?: string | null;
 };
 
+type CreatorSettingsUpdate = Partial<CreatorSettings> & {
+  openai_api_key?: string;
+};
+
 async function getAccessToken(accessToken?: string | null) {
   if (accessToken) {
     return accessToken;
@@ -146,7 +150,7 @@ export function getCreatorSettings(accessToken?: string | null) {
   return fetchJson<CreatorSettings>("/settings/creator", { accessToken });
 }
 
-export function updateCreatorSettings(payload: Partial<CreatorSettings>) {
+export function updateCreatorSettings(payload: CreatorSettingsUpdate) {
   return fetchJson<CreatorSettings>("/settings/creator", {
     method: "PUT",
     body: JSON.stringify(payload)

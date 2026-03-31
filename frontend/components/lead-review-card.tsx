@@ -9,6 +9,33 @@ function getLifecycleLabel(status: string) {
   return status.replaceAll("_", " ");
 }
 
+function getReasonCopy(reason: string, role: ViewerRole) {
+  if (role === "customer") {
+    if (reason.includes("guardrail") || reason.includes("blocked")) {
+      return "This update needs extra review before it can move ahead.";
+    }
+    return "This draft needs your approval before Newsbot can treat it as ready.";
+  }
+  if (reason.includes("guardrail")) {
+    return "This item tripped a guardrail and needs a human decision before it can move forward.";
+  }
+  return "This draft needs your approval before Newsbot can treat it as ready.";
+}
+
+function getReasonLabel(reason: string, role: ViewerRole) {
+  if (role === "customer") {
+    return reason.includes("guardrail") || reason.includes("blocked") ? "needs extra review" : "needs review";
+  }
+  return reason.replaceAll("_", " ");
+}
+
+function getTypeLabel(item: ReviewItem, role: ViewerRole) {
+  if (role === "customer") {
+    return "update";
+  }
+  return item.event?.event_type ?? "event";
+}
+
 export function LeadReviewCard({
   item,
   role
@@ -20,9 +47,9 @@ export function LeadReviewCard({
     <div className="lead-review-card">
       <div className="lead-review-top">
         <div className="row">
-          <span className="pill">{item.event?.event_type ?? "event"}</span>
-          <span className={item.reason.includes("guardrail") ? "pill warn" : "pill"}>
-            {item.reason.replaceAll("_", " ")}
+          <span className="pill">{getTypeLabel(item, role)}</span>
+          <span className={item.reason.includes("guardrail") || item.reason.includes("blocked") ? "pill warn" : "pill"}>
+            {getReasonLabel(item.reason, role)}
           </span>
         </div>
         <span className="mono">{item.event?.ticker ?? "MARKET"}</span>
@@ -45,11 +72,7 @@ export function LeadReviewCard({
         <div className="lead-review-grid">
           <div className="lead-review-block">
             <div className="section-label">Why this needs review</div>
-            <p className="card-subtle">
-              {item.reason.includes("guardrail")
-                ? "This item tripped a guardrail and needs a human decision before it can move forward."
-                : "This draft needs your approval before Newsbot can treat it as ready."}
-            </p>
+            <p className="card-subtle">{getReasonCopy(item.reason, role)}</p>
           </div>
           <div className="lead-review-block">
             <div className="section-label">Lifecycle</div>

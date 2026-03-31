@@ -105,6 +105,14 @@ export type OnboardingStatus = {
   missing: string[];
 };
 
+export type CustomerWorkspaceState =
+  | "onboarding_incomplete"
+  | "ready_to_generate"
+  | "generation_in_progress"
+  | "generation_no_matches"
+  | "generation_ready"
+  | "temporary_issue";
+
 export type PipelineRun = {
   id: number;
   workspace_user_id: number | null;

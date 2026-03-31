@@ -1,5 +1,7 @@
+import type { Route } from "next";
 import Link from "next/link";
 
+import { ViewerRole } from "@/lib/session";
 import { ReviewItem } from "@/lib/types";
 
 function overdueLabel(slaDueAt: string): string {
@@ -7,14 +9,31 @@ function overdueLabel(slaDueAt: string): string {
   return hoursAgo > 0 ? `overdue · ${hoursAgo}h ago` : "overdue";
 }
 
-export function QueueReviewRow({ item }: { item: ReviewItem }) {
+function getReasonLabel(reason: string, role: ViewerRole) {
+  if (role === "customer") {
+    if (reason.includes("guardrail") || reason.includes("blocked")) {
+      return "needs extra review";
+    }
+    return "needs review";
+  }
+  return reason.replaceAll("_", " ");
+}
+
+function getTypeLabel(item: ReviewItem, role: ViewerRole) {
+  if (role === "customer") {
+    return "update";
+  }
+  return item.event?.event_type ?? "event";
+}
+
+export function QueueReviewRow({ item, href = "/drafts", role = "admin" }: { item: ReviewItem; href?: string; role?: ViewerRole }) {
   return (
-    <Link href="/drafts" className="queue-review-row queue-review-row-link">
+    <Link href={href as Route} className="queue-review-row queue-review-row-link">
       <div className="row space">
         <div className="row">
-          <span className="pill">{item.event?.event_type ?? "event"}</span>
-          <span className={item.reason.includes("guardrail") ? "pill warn" : "pill"}>
-            {item.reason.replaceAll("_", " ")}
+          <span className="pill">{getTypeLabel(item, role)}</span>
+          <span className={item.reason.includes("guardrail") || item.reason.includes("blocked") ? "pill warn" : "pill"}>
+            {getReasonLabel(item.reason, role)}
           </span>
           {item.overdue ? (
             <span className="pill warn" title={item.sla_due_at ?? undefined}>

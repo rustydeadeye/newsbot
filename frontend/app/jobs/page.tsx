@@ -1,5 +1,5 @@
 import { AccessDenied } from "@/components/access-denied";
-import { ApiErrorPanel } from "@/components/api-error-panel";
+import { AdminApiErrorPanel } from "@/components/admin-api-error-panel";
 import { KpiCard } from "@/components/kpi-card";
 import { PublishQueuePanel } from "@/components/publish-queue-panel";
 import { ShellHeader } from "@/components/shell-header";
@@ -26,7 +26,7 @@ export default async function JobsPage() {
           viewer={viewer}
           freshnessLabel="Operational delivery workspace"
         />
-        <ApiErrorPanel
+        <AdminApiErrorPanel
           title="Publishing unavailable"
           detail={error instanceof Error ? error.message : "Unknown API error"}
         />

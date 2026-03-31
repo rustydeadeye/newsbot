@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { ApiErrorPanel } from "@/components/api-error-panel";
+import { ActiveRunRefresher } from "@/components/active-run-refresher";
+import { AdminApiErrorPanel } from "@/components/admin-api-error-panel";
+import { CustomerDegradedState } from "@/components/customer-degraded-state";
 import { EmptyState } from "@/components/empty-state";
 import { GenerateDraftsButton } from "@/components/generate-drafts-button";
 import { GuidePanel } from "@/components/guide-panel";
@@ -12,14 +14,47 @@ import { QueueReviewRow } from "@/components/queue-review-row";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getCurrentPipelineRun, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
-import { ReviewItem } from "@/lib/types";
+import { CustomerWorkspaceState, PipelineRun, ReviewItem } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
 export const revalidate = 30;
 
+function getCustomerWorkspaceState(queue: ReviewItem[], currentRun: PipelineRun | null): CustomerWorkspaceState {
+  if (queue.length > 0) {
+    return "generation_ready";
+  }
+  if (currentRun?.status === "queued" || currentRun?.status === "running") {
+    return "generation_in_progress";
+  }
+  if (currentRun?.status === "empty") {
+    return "generation_no_matches";
+  }
+  if (currentRun?.status === "failed") {
+    return "temporary_issue";
+  }
+  return "ready_to_generate";
+}
+
 export default async function HomePage() {
-  const { viewer, accessToken, onboarding } = await requireWorkspaceSession();
+  const { viewer, accessToken, onboarding, onboardingError } = await requireWorkspaceSession();
   const role = viewer.role;
+
+  if (role === "customer" && onboardingError) {
+    return (
+      <div className="page-grid">
+        <ShellHeader
+          title="Home"
+          description="Review what Newsbot found and decide what should move forward."
+          viewer={viewer}
+          freshnessLabel="Decision-first workspace"
+        />
+        <CustomerDegradedState
+          title="We could not finish opening your workspace"
+          description="Newsbot had trouble loading your setup state. Please try again shortly."
+        />
+      </div>
+    );
+  }
 
   if (role === "customer" && onboarding && !onboarding.onboarding_completed) {
     redirect("/onboarding");
@@ -44,7 +79,7 @@ export default async function HomePage() {
             viewer={viewer}
             freshnessLabel="Role-aware control center"
           />
-          <ApiErrorPanel
+          <AdminApiErrorPanel
             title="Operations overview unavailable"
             detail={error instanceof Error ? error.message : "Unknown API error"}
           />
@@ -97,7 +132,7 @@ export default async function HomePage() {
             <div className="section-title">Needs intervention</div>
             <div className="queue-list">
               {sortedQueue.slice(0, 6).map((item) => (
-                <QueueReviewRow key={item.id} item={item} />
+                <QueueReviewRow key={item.id} item={item} role="admin" />
               ))}
             </div>
           </div>
@@ -129,65 +164,74 @@ export default async function HomePage() {
           viewer={viewer}
           freshnessLabel="Decision-first workspace"
         />
-        <ApiErrorPanel
-          title="Review queue unavailable"
-          detail={error instanceof Error ? error.message : "Unknown API error"}
+        <CustomerDegradedState
+          title="We hit a temporary issue loading your review workspace"
+          description="Newsbot could not load your drafts just now. Please try again shortly."
         />
       </div>
     );
   }
 
+  const state = getCustomerWorkspaceState(queue, currentRun);
+  const runIsActive = currentRun?.status === "queued" || currentRun?.status === "running";
   const leadItem = queue[0] ?? null;
   const secondaryItems = queue.slice(1, 6);
   const highPriority = queue.filter((item: ReviewItem) => (item.event?.importance_score ?? 0) >= 80).length;
-  const blocked = queue.filter((item: ReviewItem) => item.reason.includes("blocked") || item.reason.includes("guardrail")).length;
   const ready = queue.filter((item: ReviewItem) => Boolean(item.draft?.draft_text)).length;
+  const showCustomerMetrics = state === "generation_ready";
 
   return (
     <div className="page-grid">
+      <ActiveRunRefresher active={runIsActive} />
       <ShellHeader
         title="Home"
         description="Review what Newsbot found and decide what should move forward."
         viewer={viewer}
         freshnessLabel="Decision-first workspace"
       />
-      <div className="metrics">
-        <KpiCard label="Needs Review" value={queue.length} detail="Items waiting for your decision" />
-        <KpiCard label="High Priority" value={highPriority} detail="Strong importance signals" tone={highPriority > 0 ? "warning" : "calm"} />
-        <KpiCard label="Needs Attention" value={blocked} detail="Guardrail-triggered review" tone={blocked > 0 ? "warning" : "calm"} />
-        <KpiCard label="Drafts Ready" value={ready} detail="Items with usable draft text" />
-      </div>
-      {currentRun ? (
+      {showCustomerMetrics ? (
+        <div className="metrics metrics-compact">
+          <KpiCard label="Needs Review" value={queue.length} detail="Items waiting for your decision" />
+          <KpiCard label="High Priority" value={highPriority} detail="Strong importance signals" tone={highPriority > 0 ? "warning" : "calm"} />
+          <KpiCard label="Drafts Ready" value={ready} detail="Items with usable draft text" />
+        </div>
+      ) : null}
+      {state === "generation_in_progress" ? (
         <StatusPanel
           eyebrow="Generation status"
-          title={
-            currentRun.status === "running" || currentRun.status === "queued"
-              ? "Draft generation is in progress"
-              : currentRun.status === "empty"
-                ? "No matching events found"
-                : currentRun.status === "failed"
-                  ? "Draft generation needs attention"
-                  : "Latest generation complete"
-          }
-          description={
-            currentRun.status === "running" || currentRun.status === "queued"
-              ? "Newsbot is preparing customer-specific drafts from the latest available events."
-              : currentRun.status === "empty"
-                ? "No recent events matched your current profile or watchlist. Update your settings or try again later."
-                : currentRun.status === "failed"
-                  ? (currentRun.error_message ?? "The latest generation run failed unexpectedly.")
-                  : `Latest run created ${currentRun.result_counts.drafted ?? 0} drafts for review.`
-          }
-          tone={currentRun.status === "failed" ? "danger" : currentRun.status === "empty" ? "warning" : "default"}
+          title={currentRun?.status === "queued" ? "Preparing drafts" : "Generating drafts"}
+          description="Newsbot is creating customer-specific drafts from recent updates. This page will refresh automatically when the run finishes."
         />
       ) : null}
-      {queue.length === 0 ? (
+      {state === "generation_no_matches" ? (
+        <StatusPanel
+          eyebrow="Generation status"
+          title="No matching events found"
+          description="No recent updates matched your current watchlist or profile. You can broaden your settings or try again in a little while."
+          tone="warning"
+        />
+      ) : null}
+      {state === "temporary_issue" ? (
+        <CustomerDegradedState
+          title="Draft generation needs attention"
+          description={currentRun?.error_message ?? "Newsbot could not prepare new drafts right now. Please try again shortly."}
+        />
+      ) : null}
+      {state === "ready_to_generate" ? (
         <EmptyState
-          title="No drafts need review yet"
-          description="Generate customer-specific drafts from the latest available events. When a draft needs a decision, it will appear here with the event context and next action."
+          title="Generate your first drafts"
+          description="Newsbot is ready to create draft posts from the latest updates in your coverage. Once they are ready, you will review them here before anything can move ahead."
           action={<GenerateDraftsButton />}
         />
-      ) : (
+      ) : null}
+      {state === "generation_no_matches" ? (
+        <EmptyState
+          title="Nothing needs review right now"
+          description="No recent updates matched your current setup. Update your watchlist or try another generation run when new updates arrive."
+          action={<GenerateDraftsButton label="Try again" />}
+        />
+      ) : null}
+      {state === "generation_ready" ? (
         <div className="customer-home-grid">
           <div className="customer-home-main">
             {leadItem ? <LeadReviewCard item={leadItem} role={role} /> : null}
@@ -195,31 +239,31 @@ export default async function HomePage() {
           <GuidePanel
             eyebrow="How this works"
             title="One lead decision at a time"
-            description="Newsbot gathers updates, drafts the post, and sends anything uncertain or sensitive here for your approval before it can move ahead."
+            description="Newsbot finds recent updates, drafts the post, and sends anything uncertain or sensitive here for your approval. Nothing is treated as ready until you review it."
           >
             <div className="workspace-list">
               <div className="workspace-list-row">
                 <span>Approve</span>
-                <strong>when the wording is ready</strong>
+                <strong>when the wording is ready to move forward</strong>
               </div>
               <div className="workspace-list-row">
                 <span>Reject</span>
-                <strong>when the post should be rewritten or held</strong>
+                <strong>when the draft needs a rewrite or should be held</strong>
               </div>
               <div className="workspace-list-row">
                 <span>Events</span>
-                <strong>gives you extra context, not required work</strong>
+                <strong>gives you story context, not required work</strong>
               </div>
             </div>
           </GuidePanel>
         </div>
-      )}
-      {secondaryItems.length > 0 ? (
+      ) : null}
+      {state === "generation_ready" && secondaryItems.length > 0 ? (
         <div className="panel">
           <div className="section-title">Up next</div>
           <div className="queue-list">
             {secondaryItems.map((item) => (
-              <QueueReviewRow key={item.id} item={item} />
+              <QueueReviewRow key={item.id} item={item} href={`/drafts?draftId=${item.draft?.id ?? item.id}`} role="customer" />
             ))}
           </div>
         </div>

@@ -20,6 +20,7 @@ export function NavShell({
   items: NavItem[];
 }) {
   const pathname = usePathname();
+  const isOnboarding = pathname.startsWith("/onboarding");
 
   return (
     <>
@@ -47,16 +48,25 @@ export function NavShell({
           </div>
         </div>
       </div>
-      <nav className="nav">
-        {items.map((item) => {
-          const active = pathname === item.href;
-          return (
-            <Link key={item.href} className={active ? "nav-link active" : "nav-link"} href={item.href}>
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
+      {isOnboarding ? (
+        <div className="onboarding-sidebar-note">
+          <div className="section-title">Focused setup</div>
+          <div className="card-subtle">
+            Finish this short setup first. Once your workspace is ready, Newsbot will take you straight into draft generation and review.
+          </div>
+        </div>
+      ) : (
+        <nav className="nav">
+          {items.map((item) => {
+            const active = pathname === item.href;
+            return (
+              <Link key={item.href} className={active ? "nav-link active" : "nav-link"} href={item.href}>
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      )}
     </>
   );
 }

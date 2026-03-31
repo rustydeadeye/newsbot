@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 
-import { ApiErrorPanel } from "@/components/api-error-panel";
+import { AdminApiErrorPanel } from "@/components/admin-api-error-panel";
 import { ConnectXButton } from "@/components/connect-x-button";
+import { CustomerDegradedState } from "@/components/customer-degraded-state";
 import { SettingsForm } from "@/components/settings-form";
 import { SettingsSection } from "@/components/settings-section";
 import { ShellHeader } from "@/components/shell-header";
@@ -12,8 +13,24 @@ import { CreatorSettings, SourceSummary } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
 export default async function SettingsPage() {
-  const { viewer, accessToken, onboarding } = await requireWorkspaceSession();
+  const { viewer, accessToken, onboarding, onboardingError } = await requireWorkspaceSession();
   const role = viewer.role;
+  if (role === "customer" && onboardingError) {
+    return (
+      <div className="page-grid">
+        <ShellHeader
+          title="Settings"
+          description="Manage the controls that shape how Newsbot works for you."
+          viewer={viewer}
+          freshnessLabel="Workspace configuration"
+        />
+        <CustomerDegradedState
+          title="We could not finish loading your settings"
+          description="Newsbot had trouble loading your customer setup. Please try again shortly."
+        />
+      </div>
+    );
+  }
   if (role === "customer" && onboarding && !onboarding.onboarding_completed) {
     redirect("/onboarding");
   }
@@ -34,10 +51,17 @@ export default async function SettingsPage() {
           viewer={viewer}
           freshnessLabel="Workspace configuration"
         />
-        <ApiErrorPanel
-          title="Settings unavailable"
-          detail={error instanceof Error ? error.message : "Unknown API error"}
-        />
+        {role === "admin" ? (
+          <AdminApiErrorPanel
+            title="Settings unavailable"
+            detail={error instanceof Error ? error.message : "Unknown API error"}
+          />
+        ) : (
+          <CustomerDegradedState
+            title="We could not load your settings right now"
+            description="Newsbot had trouble opening your workspace settings. Please try again shortly."
+          />
+        )}
       </div>
     );
   }
@@ -56,13 +80,51 @@ export default async function SettingsPage() {
         freshnessLabel={role === "admin" ? "Customer-owned and system-owned controls" : "Customer-owned controls"}
       />
       <div className="settings-layout">
-        <SettingsSection
-          eyebrow="Customer-owned controls"
-          title={role === "admin" ? "Workspace preferences visible to customers" : "My workspace preferences"}
-          description="These settings shape what gets surfaced, how drafts are framed, and how the workspace feels day to day."
-        >
-          <SettingsForm settings={settings} role={role} />
-        </SettingsSection>
+        {role === "admin" ? (
+          <SettingsSection
+            eyebrow="Customer-owned controls"
+            title="Workspace preferences visible to customers"
+            description="These settings shape what gets surfaced, how drafts are framed, and how the workspace feels day to day."
+          >
+            <SettingsForm settings={settings} role={role} />
+          </SettingsSection>
+        ) : (
+          <>
+            <SettingsSection
+              eyebrow="Profile"
+              title="How Newsbot presents your workspace"
+              description="Set the name and voice Newsbot should use when framing draft copy for you."
+            >
+              <SettingsForm settings={settings} role={role} section="profile" />
+            </SettingsSection>
+            <SettingsSection
+              eyebrow="Draft generation"
+              title="AI drafting connection"
+              description="Connect or replace your OpenAI key so Newsbot can generate draft copy for your workspace."
+            >
+              <SettingsForm settings={settings} role={role} section="generation" />
+            </SettingsSection>
+            <SettingsSection
+              eyebrow="Content filters"
+              title="What should be prioritized or avoided"
+              description="Use your watchlist and phrase filters to shape which updates rise to the top and how the draft is worded."
+            >
+              <SettingsForm settings={settings} role={role} section="filters" />
+            </SettingsSection>
+            <SettingsSection
+              eyebrow="Publishing connection"
+              title="Connect X when you are ready"
+              description="X is only needed for publishing workflows. You can review and generate drafts without connecting it."
+            >
+              <ConnectXButton connected={settings.x_connected} nextPath="/settings" />
+            </SettingsSection>
+            <StatusPanel
+              eyebrow="How settings work"
+              title="These controls shape what you review"
+              description="Newsbot uses your preferences to prioritize updates, draft the wording, and keep unwanted phrases out of customer-facing copy."
+            />
+          </>
+        )}
         {role === "admin" ? (
           <SettingsSection
             eyebrow="Publishing account"
@@ -90,13 +152,7 @@ export default async function SettingsPage() {
               ))}
             </div>
           </SettingsSection>
-        ) : (
-          <StatusPanel
-            eyebrow="How settings work"
-            title="These controls shape what you review"
-            description="Your watchlist and blocked phrases change what gets surfaced and how drafts are framed, but they do not expose system-level publishing controls."
-          />
-        )}
+        ) : null}
       </div>
     </div>
   );
