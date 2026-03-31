@@ -1,8 +1,11 @@
 import base64
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 import jwt
+
+_log = logging.getLogger(__name__)
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
@@ -93,6 +96,7 @@ def get_current_viewer(
     try:
         claims = _decode_supabase_jwt(credentials.credentials, settings)
     except jwt.PyJWTError as exc:
+        _log.warning("JWT decode failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth token") from exc
 
     user_id = claims.get("sub")
