@@ -130,3 +130,16 @@ export type PipelineRun = {
 export type AuthMeResponse = {
   viewer: ViewerProfile;
 };
+
+export type CustomerHomePayload = {
+  queue: ReviewItem[];
+  approved_drafts: DraftSummary[];
+  settings: CreatorSettings;
+};
+
+export type CustomerDraftsPayload = {
+  drafts: DraftSummary[];
+  approved_drafts: DraftSummary[];
+  rejected_drafts: DraftSummary[];
+  settings: CreatorSettings;
+};

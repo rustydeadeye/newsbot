@@ -13,7 +13,7 @@ import { PipelineRunButton } from "@/components/pipeline-run-button";
 import { QueueReviewRow } from "@/components/queue-review-row";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
-import { getApprovedDrafts, getCreatorSettings, getCurrentPipelineRun, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
+import { getCurrentPipelineRun, getCustomerHomeWorkspace, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
 import { formatPublishTime } from "@/lib/publish-plan";
 import { CustomerWorkspaceState, PipelineRun, ReviewItem } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
@@ -157,12 +157,14 @@ export default async function HomePage() {
   let customerSettings = null;
   let approvedDrafts = [];
   try {
-    [queue, currentRun, customerSettings, approvedDrafts] = await Promise.all([
-      getReviewQueue(accessToken),
+    const [workspace, run] = await Promise.all([
+      getCustomerHomeWorkspace(accessToken),
       getCurrentPipelineRun(accessToken),
-      getCreatorSettings(accessToken),
-      getApprovedDrafts(accessToken),
     ]);
+    queue = workspace.queue;
+    approvedDrafts = workspace.approved_drafts;
+    customerSettings = workspace.settings;
+    currentRun = run;
   } catch (error) {
     return (
       <div className="page-grid">

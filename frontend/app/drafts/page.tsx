@@ -12,7 +12,7 @@ import { RejectedDraftsSection } from "@/components/rejected-drafts-section";
 import { ReviewActions } from "@/components/review-actions";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
-import { getApprovedDrafts, getCreatorSettings, getCurrentPipelineRun, getRejectedDrafts, getReviewDrafts } from "@/lib/api";
+import { getCurrentPipelineRun, getCustomerDraftsWorkspace } from "@/lib/api";
 import { formatPublishTime } from "@/lib/publish-plan";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
@@ -50,13 +50,19 @@ export default async function DraftsPage({
   let currentRun = null;
   let customerSettings = null;
   try {
-    [drafts, approvedDrafts, rejectedDrafts, currentRun, customerSettings] = await Promise.all([
-      getReviewDrafts(accessToken),
-      role === "customer" ? getApprovedDrafts(accessToken) : Promise.resolve([]),
-      getRejectedDrafts(accessToken),
-      role === "customer" ? getCurrentPipelineRun(accessToken) : Promise.resolve(null),
-      role === "customer" ? getCreatorSettings(accessToken) : Promise.resolve(null),
-    ]);
+    if (role === "customer") {
+      const [workspace, run] = await Promise.all([
+        getCustomerDraftsWorkspace(accessToken),
+        getCurrentPipelineRun(accessToken),
+      ]);
+      drafts = workspace.drafts;
+      approvedDrafts = workspace.approved_drafts;
+      rejectedDrafts = workspace.rejected_drafts;
+      customerSettings = workspace.settings;
+      currentRun = run;
+    } else {
+      [drafts, approvedDrafts, rejectedDrafts, currentRun, customerSettings] = [[], [], [], null, null];
+    }
   } catch (error) {
     return (
       <div className="page-grid">

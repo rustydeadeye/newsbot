@@ -41,11 +41,7 @@ def _serialize_draft(draft, job_repo: PublishJobRepository | None = None) -> dic
     return payload
 
 
-@router.get("")
-def list_review_queue(
-    db: Session = Depends(get_db),
-    viewer: ViewerContext = Depends(get_current_viewer),
-) -> list[dict]:
+def _review_queue_payload(db: Session, viewer: ViewerContext) -> list[dict]:
     review_repo = ReviewQueueRepository(db)
     event_repo = EventRepository(db)
     draft_repo = DraftRepository(db)
@@ -56,6 +52,60 @@ def list_review_queue(
         draft = _viewer_draft(draft_repo, item.event_id, viewer)
         payload.append({**item.to_dict(), "event": _serialize_event(event, viewer), "draft": draft.to_dict() if draft else None})
     return payload
+
+
+def _review_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
+    draft_repo = DraftRepository(db)
+    event_repo = EventRepository(db)
+    drafts = (
+        draft_repo.list_needing_review_for_workspace_user(viewer.workspace_user_id)
+        if viewer.is_customer
+        else draft_repo.list_needing_review()
+    )
+    payload = []
+    for draft in drafts:
+        event = event_repo.get(draft.event_id)
+        payload.append({**draft.to_dict(), "event": _serialize_event(event, viewer)})
+    return payload
+
+
+def _approved_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
+    draft_repo = DraftRepository(db)
+    event_repo = EventRepository(db)
+    job_repo = PublishJobRepository(db)
+    drafts = (
+        draft_repo.list_customer_post_approval_for_workspace_user(viewer.workspace_user_id)
+        if viewer.is_customer
+        else []
+    )
+    payload = []
+    for draft in drafts:
+        event = event_repo.get(draft.event_id)
+        payload.append({**_serialize_draft(draft, job_repo), "event": _serialize_event(event, viewer)})
+    return payload
+
+
+def _rejected_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
+    draft_repo = DraftRepository(db)
+    event_repo = EventRepository(db)
+    drafts = (
+        draft_repo.list_rejected_for_workspace_user(viewer.workspace_user_id)
+        if viewer.is_customer
+        else draft_repo.list_rejected()
+    )
+    payload = []
+    for draft in drafts:
+        event = event_repo.get(draft.event_id)
+        payload.append({**draft.to_dict(), "event": _serialize_event(event, viewer)})
+    return payload
+
+
+@router.get("")
+def list_review_queue(
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> list[dict]:
+    return _review_queue_payload(db, viewer)
 
 
 @router.get("/overdue")
@@ -80,18 +130,7 @@ def list_review_drafts(
     db: Session = Depends(get_db),
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> list[dict]:
-    draft_repo = DraftRepository(db)
-    event_repo = EventRepository(db)
-    drafts = (
-        draft_repo.list_needing_review_for_workspace_user(viewer.workspace_user_id)
-        if viewer.is_customer
-        else draft_repo.list_needing_review()
-    )
-    payload = []
-    for draft in drafts:
-        event = event_repo.get(draft.event_id)
-        payload.append({**draft.to_dict(), "event": _serialize_event(event, viewer)})
-    return payload
+    return _review_drafts_payload(db, viewer)
 
 
 @router.get("/drafts/approved")
@@ -99,19 +138,7 @@ def list_approved_drafts(
     db: Session = Depends(get_db),
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> list[dict]:
-    draft_repo = DraftRepository(db)
-    event_repo = EventRepository(db)
-    job_repo = PublishJobRepository(db)
-    drafts = (
-        draft_repo.list_customer_post_approval_for_workspace_user(viewer.workspace_user_id)
-        if viewer.is_customer
-        else []
-    )
-    payload = []
-    for draft in drafts:
-        event = event_repo.get(draft.event_id)
-        payload.append({**_serialize_draft(draft, job_repo), "event": _serialize_event(event, viewer)})
-    return payload
+    return _approved_drafts_payload(db, viewer)
 
 
 @router.post("/drafts/{draft_id}/approve")
@@ -208,18 +235,44 @@ def list_rejected_drafts(
     db: Session = Depends(get_db),
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> list[dict]:
-    draft_repo = DraftRepository(db)
-    event_repo = EventRepository(db)
-    drafts = (
-        draft_repo.list_rejected_for_workspace_user(viewer.workspace_user_id)
-        if viewer.is_customer
-        else draft_repo.list_rejected()
+    return _rejected_drafts_payload(db, viewer)
+
+
+@router.get("/workspace/home")
+def get_customer_home_workspace(
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> dict:
+    if not viewer.is_customer:
+        raise HTTPException(status_code=403, detail="Customer access required")
+    settings = CustomerProfileRepository(db).get_or_create_for_workspace_user(
+        viewer.workspace_user_id,
+        default_display_name=viewer.display_name,
     )
-    payload = []
-    for draft in drafts:
-        event = event_repo.get(draft.event_id)
-        payload.append({**draft.to_dict(), "event": _serialize_event(event, viewer)})
-    return payload
+    return {
+        "queue": _review_queue_payload(db, viewer),
+        "approved_drafts": _approved_drafts_payload(db, viewer),
+        "settings": settings.to_dict(),
+    }
+
+
+@router.get("/workspace/drafts")
+def get_customer_drafts_workspace(
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> dict:
+    if not viewer.is_customer:
+        raise HTTPException(status_code=403, detail="Customer access required")
+    settings = CustomerProfileRepository(db).get_or_create_for_workspace_user(
+        viewer.workspace_user_id,
+        default_display_name=viewer.display_name,
+    )
+    return {
+        "drafts": _review_drafts_payload(db, viewer),
+        "approved_drafts": _approved_drafts_payload(db, viewer),
+        "rejected_drafts": _rejected_drafts_payload(db, viewer),
+        "settings": settings.to_dict(),
+    }
 
 
 @router.post("/drafts/{draft_id}/reopen")
