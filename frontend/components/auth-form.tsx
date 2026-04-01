@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from "react";
 
+import { getAuthMe } from "@/lib/api";
+import { getRoleHomePath } from "@/lib/product-mode";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 async function waitForSession() {
@@ -16,6 +18,24 @@ async function waitForSession() {
     await new Promise((resolve) => window.setTimeout(resolve, 150));
   }
   return null;
+}
+
+async function syncServerSession(accessToken: string, refreshToken: string) {
+  const response = await fetch("/auth/session", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Failed to sync session: ${detail}`);
+  }
 }
 
 export function AuthForm() {
@@ -34,8 +54,13 @@ export function AuthForm() {
           if (error) {
             throw error;
           }
-          await waitForSession();
-          window.location.assign("/");
+          const session = await waitForSession();
+          if (!session?.access_token || !session.refresh_token) {
+            throw new Error("Signed in, but the session could not be restored.");
+          }
+          await syncServerSession(session.access_token, session.refresh_token);
+          const auth = await getAuthMe(session.access_token);
+          window.location.assign(getRoleHomePath(auth.viewer.role));
           return;
         }
 
