@@ -37,13 +37,13 @@ def test_plan_wire_queue_spaces_candidates_by_priority() -> None:
         _candidate("Normal order", 70, event_type="order_win", ticker="CCC"),
     ]
 
-    decisions = plan_wire_queue(candidates, now=now)
+    decisions = plan_wire_queue(candidates, now=now, settings=WireFeedSettings(max_posts_per_hour=10))
 
     assert decisions[0].action == "post_now"
     assert decisions[0].scheduled_for == now
     assert decisions[1].action == "queue"
-    assert decisions[1].scheduled_for == now + timedelta(minutes=8)
-    assert decisions[2].scheduled_for == now + timedelta(minutes=20)
+    assert decisions[1].scheduled_for == now + timedelta(minutes=45)
+    assert decisions[2].scheduled_for == now + timedelta(minutes=105)
 
 
 def test_plan_wire_queue_skips_recent_duplicate() -> None:
@@ -61,27 +61,60 @@ def test_plan_wire_queue_respects_hourly_limit() -> None:
     now = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
     recent = [
         WirePostRecord(dedupe_key=f"earnings|t{i}|k", posted_at=now - timedelta(minutes=5 * i))
-        for i in range(6)
+        for i in range(2)
     ]
     candidate = _candidate("Another update", 90, ticker="NEWS")
 
-    decisions = plan_wire_queue([candidate], recent_posts=recent, now=now, settings=WireFeedSettings(max_posts_per_hour=6))
+    decisions = plan_wire_queue([candidate], recent_posts=recent, now=now, settings=WireFeedSettings(max_posts_per_hour=2))
 
     assert decisions[0].action == "skip"
     assert decisions[0].reason == "hourly_limit"
 
 
-def test_plan_wire_queue_moves_item_to_next_window_when_outside_ist_window() -> None:
+def test_plan_wire_queue_delays_non_breaking_items_during_quiet_hours() -> None:
     now = datetime(2026, 4, 1, 20, 30, tzinfo=timezone.utc)  # 02:00 IST on Apr 2
-    candidate = _candidate("Overnight update", 95, event_type="default_fraud", ticker="NEWS")
+    candidate = _candidate("Overnight update", 90, event_type="earnings", ticker="NEWS")
+    candidate = candidate.__class__(**{**candidate.__dict__, "published_at": now - timedelta(hours=1)})
 
     decisions = plan_wire_queue([candidate], now=now)
 
     assert decisions[0].action == "queue"
-    assert decisions[0].scheduled_for == datetime(2026, 4, 2, 2, 30, tzinfo=timezone.utc)  # 08:00 IST
+    assert decisions[0].scheduled_for == datetime(2026, 4, 2, 1, 30, tzinfo=timezone.utc)  # 07:00 IST
 
 
-def test_plan_wire_queue_posts_now_inside_ist_window() -> None:
+def test_plan_wire_queue_allows_breaking_items_during_quiet_hours() -> None:
+    now = datetime(2026, 4, 1, 20, 30, tzinfo=timezone.utc)  # 02:00 IST on Apr 2
+    candidate = _candidate("Overnight breaking", 95, event_type="default_fraud", ticker="NEWS")
+
+    decisions = plan_wire_queue([candidate], now=now)
+
+    assert decisions[0].action == "post_now"
+    assert decisions[0].scheduled_for == now
+
+
+def test_plan_wire_queue_skips_stale_normal_candidate() -> None:
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
+    candidate = _candidate("Old normal item", 75, event_type="order_win", ticker="OLD")
+    stale_candidate = candidate.__class__(**{**candidate.__dict__, "published_at": now - timedelta(hours=5)})
+
+    decisions = plan_wire_queue([stale_candidate], now=now)
+
+    assert decisions[0].action == "skip"
+    assert decisions[0].reason == "stale_candidate"
+
+
+def test_plan_wire_queue_skips_stale_high_candidate() -> None:
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
+    candidate = _candidate("Old high item", 90, event_type="earnings", ticker="HIGH")
+    stale_candidate = candidate.__class__(**{**candidate.__dict__, "published_at": now - timedelta(hours=7)})
+
+    decisions = plan_wire_queue([stale_candidate], now=now)
+
+    assert decisions[0].action == "skip"
+    assert decisions[0].reason == "stale_candidate"
+
+
+def test_plan_wire_queue_posts_now_outside_quiet_hours() -> None:
     now = datetime(2026, 4, 1, 5, 0, tzinfo=timezone.utc)  # 10:30 IST
     candidate = _candidate("In-window update", 95, event_type="default_fraud", ticker="NEWS")
 

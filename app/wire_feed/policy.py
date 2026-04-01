@@ -9,21 +9,26 @@ from app.wire_feed.pipeline import WirePipelineResult
 
 @dataclass(frozen=True)
 class WireFeedSettings:
-    max_posts_per_hour: int = 6
-    max_posts_per_day: int = 30
-    breaking_gap_minutes: int = 3
-    high_gap_minutes: int = 8
-    normal_gap_minutes: int = 12
+    max_posts_per_hour: int = 2
+    max_posts_per_day: int = 12
+    breaking_gap_minutes: int = 10
+    high_gap_minutes: int = 45
+    normal_gap_minutes: int = 60
     duplicate_cooldown_minutes: int = 180
+    high_ttl_hours: int = 6
+    normal_ttl_hours: int = 4
     timezone: str = "Asia/Kolkata"
-    posting_window_start_hour: int = 8
-    posting_window_end_hour: int = 20
+    quiet_hours_start_hour: int = 23
+    quiet_hours_end_hour: int = 7
 
 
 @dataclass(frozen=True)
 class WirePostRecord:
     dedupe_key: str
     posted_at: datetime
+    priority: str = "normal"
+    status: str = "posted"
+    job_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,10 @@ def plan_wire_queue(
         dedupe_key = _wire_dedupe_key(candidate)
         priority = _priority_bucket(candidate)
 
+        if _is_stale(candidate, priority, now, settings):
+            decisions.append(WireQueueDecision(result=candidate, action="skip", priority=priority, reason="stale_candidate"))
+            continue
+
         if _is_duplicate_recent(dedupe_key, planned_posts, now, settings):
             decisions.append(WireQueueDecision(result=candidate, action="skip", priority=priority, reason="duplicate_cooldown"))
             continue
@@ -67,12 +76,16 @@ def plan_wire_queue(
             continue
 
         gap_minutes = _gap_minutes(priority, settings)
-        earliest = now if last_scheduled is None else max(now, last_scheduled + timedelta(minutes=gap_minutes))
-        if not _in_posting_window(earliest, settings):
-            earliest = _next_window_open(earliest, settings)
+        if priority == "breaking":
+            last_breaking = max((record.posted_at for record in planned_posts if record.priority == "breaking"), default=None)
+            earliest = now if last_breaking is None else max(now, last_breaking + timedelta(minutes=gap_minutes))
+        else:
+            earliest = now if last_scheduled is None else max(now, last_scheduled + timedelta(minutes=gap_minutes))
+        if _uses_quiet_hours(priority) and _in_quiet_hours(earliest, settings):
+            earliest = _next_quiet_end(earliest, settings)
         action = "post_now" if earliest <= now else "queue"
         decisions.append(WireQueueDecision(result=candidate, action=action, priority=priority, scheduled_for=earliest))
-        planned_posts.append(WirePostRecord(dedupe_key=dedupe_key, posted_at=earliest))
+        planned_posts.append(WirePostRecord(dedupe_key=dedupe_key, posted_at=earliest, priority=priority, status="queued"))
         last_scheduled = earliest
 
     return decisions
@@ -92,6 +105,34 @@ def _gap_minutes(priority: str, settings: WireFeedSettings) -> int:
     if priority == "high":
         return settings.high_gap_minutes
     return settings.normal_gap_minutes
+
+
+def _uses_quiet_hours(priority: str) -> bool:
+    return priority != "breaking"
+
+
+def _is_stale(
+    candidate: WirePipelineResult,
+    priority: str,
+    now: datetime,
+    settings: WireFeedSettings,
+) -> bool:
+    if candidate.published_at is None or priority == "breaking":
+        return False
+    ttl_hours = settings.high_ttl_hours if priority == "high" else settings.normal_ttl_hours
+    return candidate.published_at < now - timedelta(hours=ttl_hours)
+
+
+def is_stale_published_at(
+    published_at: datetime | None,
+    priority: str,
+    now: datetime,
+    settings: WireFeedSettings,
+) -> bool:
+    if published_at is None or priority == "breaking":
+        return False
+    ttl_hours = settings.high_ttl_hours if priority == "high" else settings.normal_ttl_hours
+    return published_at < now - timedelta(hours=ttl_hours)
 
 
 def _is_duplicate_recent(
@@ -114,27 +155,27 @@ def _wire_dedupe_key(candidate: WirePipelineResult) -> str:
     return f"{candidate.event_type}|{ticker}|{subject}"
 
 
-def _in_posting_window(current: datetime, settings: WireFeedSettings) -> bool:
+def _in_quiet_hours(current: datetime, settings: WireFeedSettings) -> bool:
     tz = ZoneInfo(settings.timezone)
     local_hour = current.astimezone(tz).hour
-    start = settings.posting_window_start_hour
-    end = settings.posting_window_end_hour
+    start = settings.quiet_hours_start_hour
+    end = settings.quiet_hours_end_hour
     if start == end:
-        return True
+        return False
     if start < end:
         return start <= local_hour < end
     return local_hour >= start or local_hour < end
 
 
-def _next_window_open(current: datetime, settings: WireFeedSettings) -> datetime:
+def _next_quiet_end(current: datetime, settings: WireFeedSettings) -> datetime:
     tz = ZoneInfo(settings.timezone)
     local_current = current.astimezone(tz)
     next_open = local_current.replace(
-        hour=settings.posting_window_start_hour,
+        hour=settings.quiet_hours_end_hour,
         minute=0,
         second=0,
         microsecond=0,
     )
-    if next_open <= local_current:
+    if not _in_quiet_hours(current, settings) or next_open <= local_current:
         next_open = next_open + timedelta(days=1)
     return next_open.astimezone(timezone.utc)

@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://dryrun:dryrun@localhost/dryrun")
+
 from app.wire_feed.runner import run_wire_cycle
 
 
@@ -148,6 +152,9 @@ def test_run_wire_cycle_does_not_publish_when_customer_autopost_disabled(monkeyp
         def __init__(self, db):
             self.db = db
 
+        def expire_stale_jobs(self, now, settings):
+            return 0
+
         def recent_post_records(self, since):
             return []
 
@@ -262,8 +269,14 @@ def test_run_wire_cycle_returns_summary(monkeypatch) -> None:
         def __init__(self, db):
             self.db = db
 
+        def expire_stale_jobs(self, now, settings):
+            return 0
+
         def recent_post_records(self, since):
             return []
+
+        def bump_non_breaking_queue(self, earliest, settings):
+            return 0
 
         def record_decision(self, candidate, decision):
             return None
@@ -282,3 +295,109 @@ def test_run_wire_cycle_returns_summary(monkeypatch) -> None:
     assert summary["queued"] == 0
     assert summary["skipped"] == 0
     assert summary["posted"] == 1
+
+
+def test_run_wire_cycle_bumps_non_breaking_jobs_for_breaking_item(monkeypatch) -> None:
+    class StubSource:
+        key = "tradient"
+
+    class StubDrafting:
+        pass
+
+    monkeypatch.setattr("app.wire_feed.runner.get_wire_sources", lambda: [StubSource()])
+    monkeypatch.setattr("app.wire_feed.runner.DraftingService", lambda: StubDrafting())
+    monkeypatch.setattr(
+        "app.wire_feed.runner.fetch_and_process",
+        lambda source, drafting: [
+            type(
+                "Result",
+                (),
+                {
+                    "external_id": "tradient:breaking-1",
+                    "source_name": "tradient_market_news",
+                    "title": "Breaking penalty",
+                    "event_type": "default_fraud",
+                    "dedupe_key": "default_fraud|abc|penalty",
+                    "subject_key": "penalty",
+                    "ticker": "ABC",
+                    "importance_score": 100,
+                    "confidence_score": 0.95,
+                    "would_auto_post": True,
+                    "review_reason": None,
+                    "draft_text": "ABC: PENALTY IMPOSED",
+                    "safety_flags": {},
+                    "published_at": None,
+                },
+            )()
+        ],
+    )
+
+    bump_calls = {"count": 0}
+
+    def fake_plan(results, recent_posts, now, settings):
+        return [
+            type(
+                "Decision",
+                (),
+                {
+                    "action": "post_now",
+                    "priority": "breaking",
+                    "scheduled_for": now,
+                    "reason": None,
+                    "result": results[0],
+                },
+            )()
+        ]
+
+    monkeypatch.setattr("app.wire_feed.runner.plan_wire_queue", fake_plan)
+    monkeypatch.setattr("app.wire_feed.runner._publish_due_jobs", lambda db, now: {"posted": 0, "failed": 0})
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self):
+            return None
+
+        def get(self, model, ident):
+            return None
+
+    monkeypatch.setattr("app.wire_feed.runner.SessionLocal", lambda: FakeSession())
+
+    class FakeCandidateRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def upsert_from_result(self, result):
+            return type("Candidate", (), {"id": 1})()
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def expire_stale_jobs(self, now, settings):
+            return 0
+
+        def recent_post_records(self, since):
+            return []
+
+        def bump_non_breaking_queue(self, earliest, settings):
+            bump_calls["count"] += 1
+            return 1
+
+        def record_decision(self, candidate, decision):
+            return None
+
+    monkeypatch.setattr("app.wire_feed.runner.WireCandidateRepository", FakeCandidateRepo)
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr(
+        "app.wire_feed.runner.CustomerProfileRepository",
+        lambda db: type("CustomerRepo", (), {"has_active_autopost_customer": lambda self: True})(),
+    )
+
+    run_wire_cycle()
+
+    assert bump_calls["count"] == 1

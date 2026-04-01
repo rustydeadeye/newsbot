@@ -37,7 +37,9 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
     with SessionLocal() as db:
         candidate_repo = WireCandidateRepository(db)
         job_repo = WireJobRepository(db)
+        expired = job_repo.expire_stale_jobs(now, policy)
         recent_records = job_repo.recent_post_records(now - timedelta(days=1))
+        summary["skipped"] += expired
 
         for source in get_wire_sources():
             results = fetch_and_process(source, drafting)
@@ -47,6 +49,8 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
             source_items: list[dict] = []
             for decision in decisions:
                 candidate = candidate_repo.upsert_from_result(decision.result)
+                if decision.priority == "breaking" and decision.action in {"post_now", "queue"} and decision.scheduled_for is not None:
+                    job_repo.bump_non_breaking_queue(decision.scheduled_for, policy)
                 job_repo.record_decision(candidate, decision)
                 if decision.action == "post_now":
                     summary["post_now"] += 1

@@ -183,6 +183,11 @@ export type AutopostDashboard = {
     end_hour: number;
     timezone: string;
   };
+  quiet_hours: {
+    start_hour: number;
+    end_hour: number;
+    timezone: string;
+  };
   scan_interval_minutes: number;
   next_posts: {
     id: number;

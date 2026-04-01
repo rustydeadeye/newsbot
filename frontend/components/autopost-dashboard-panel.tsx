@@ -8,6 +8,9 @@ import { formatOptionalDateTime } from "@/lib/lifecycle-ui";
 import { AutopostDashboard } from "@/lib/types";
 
 function formatPostingWindow(startHour: number, endHour: number, timezone: string) {
+  if (startHour === endHour) {
+    return `24/7 ${timezone}`;
+  }
   return `${startHour}:00 to ${endHour}:00 ${timezone}`;
 }
 
@@ -79,8 +82,12 @@ export function AutopostDashboardPanel({ initialDashboard }: { initialDashboard:
             <strong>{dashboard.x_connected ? "Connected" : "Not connected"}</strong>
           </div>
           <div className="workspace-list-row">
-            <span>Posting window</span>
+            <span>Publishing</span>
             <strong>{formatPostingWindow(dashboard.posting_window.start_hour, dashboard.posting_window.end_hour, "IST")}</strong>
+          </div>
+          <div className="workspace-list-row">
+            <span>Quiet hours</span>
+            <strong>{formatPostingWindow(dashboard.quiet_hours.start_hour, dashboard.quiet_hours.end_hour, "IST")} for standard posts</strong>
           </div>
           <div className="workspace-list-row">
             <span>Scan cadence</span>

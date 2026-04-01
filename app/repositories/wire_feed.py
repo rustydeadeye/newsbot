@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.wire_feed import WireCandidate, WireJob, WirePublishLog
 from app.wire_feed.pipeline import WirePipelineResult
-from app.wire_feed.policy import WirePostRecord, WireQueueDecision
+from app.wire_feed.policy import WireFeedSettings, WirePostRecord, WireQueueDecision, is_stale_published_at
 
 
 class WireCandidateRepository:
@@ -130,6 +130,35 @@ class WireJobRepository:
         self.db.flush()
         return job
 
+    def bump_non_breaking_queue(self, earliest: datetime, settings: WireFeedSettings) -> int:
+        stmt: Select[tuple[WireJob, WireCandidate]] = (
+            select(WireJob, WireCandidate)
+            .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
+            .where(
+                WireJob.status == "queued",
+                WireJob.scheduled_for.is_not(None),
+                WireJob.scheduled_for >= earliest,
+                WireJob.priority.in_(("high", "normal")),
+            )
+            .order_by(WireJob.scheduled_for.asc(), WireJob.id.asc())
+        )
+        rows = list(self.db.execute(stmt).all())
+        if not rows:
+            return 0
+
+        cursor = earliest + timedelta(minutes=settings.breaking_gap_minutes)
+        bumped = 0
+        for job, candidate in rows:
+            original_time = job.scheduled_for or cursor
+            next_time = max(original_time, cursor)
+            if next_time != job.scheduled_for:
+                job.scheduled_for = next_time
+                candidate.last_scheduled_for = next_time
+                bumped += 1
+            cursor = next_time + timedelta(minutes=_queue_gap_minutes(job.priority, settings))
+        self.db.flush()
+        return bumped
+
     def recent_post_records(self, since: datetime) -> list[WirePostRecord]:
         stmt: Select[tuple[WireCandidate, WireJob]] = (
             select(WireCandidate, WireJob)
@@ -144,9 +173,33 @@ class WireJobRepository:
             WirePostRecord(
                 dedupe_key=candidate.dedupe_key,
                 posted_at=(job.scheduled_for or job.updated_at or datetime.now(timezone.utc)),
+                priority=job.priority,
+                status=job.status,
+                job_id=job.id,
             )
             for candidate, job in rows
         ]
+
+    def expire_stale_jobs(self, now: datetime, settings: WireFeedSettings) -> int:
+        stmt: Select[tuple[WireJob, WireCandidate]] = (
+            select(WireJob, WireCandidate)
+            .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
+            .where(WireJob.status == "queued")
+        )
+        rows = list(self.db.execute(stmt).all())
+        expired = 0
+        for job, candidate in rows:
+            if is_stale_published_at(candidate.published_at, job.priority, now, settings):
+                job.status = "skipped"
+                job.result_message = "stale_candidate"
+                job.last_error = None
+                candidate.last_action = "skip"
+                candidate.last_reason = "stale_candidate"
+                candidate.last_scheduled_for = None
+                expired += 1
+        if expired:
+            self.db.flush()
+        return expired
 
     def claim_ready(self, now: datetime, limit: int = 20) -> list[WireJob]:
         stmt = (
@@ -208,3 +261,11 @@ def _decision_status(decision: WireQueueDecision) -> str:
     if decision.action == "skip":
         return "skipped"
     return "queued"
+
+
+def _queue_gap_minutes(priority: str, settings: WireFeedSettings) -> int:
+    if priority == "breaking":
+        return settings.breaking_gap_minutes
+    if priority == "high":
+        return settings.high_gap_minutes
+    return settings.normal_gap_minutes
