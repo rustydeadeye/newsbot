@@ -64,7 +64,7 @@ def main() -> None:
                 raw_payload=fetched.raw_payload, checksum="dryrun",
             )
             facts = extract_facts(source, si)
-            importance = score_event(src["name"], facts["event_class"], facts.get("ticker"))
+            importance = score_event(src["name"], facts["event_class"], facts.get("ticker"), headline=facts.get("headline"))
             confidence = 0.95 if src["name"] in SOURCE_PRIORITY else 0.70
 
             from types import SimpleNamespace

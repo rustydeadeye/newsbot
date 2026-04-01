@@ -12,6 +12,7 @@ export const metadata: Metadata = {
 
 const customerNavItems = [
   { href: "/" as Route, label: "Home" },
+  { href: "/autopost" as Route, label: "Autopost" },
   { href: "/drafts" as Route, label: "Drafts" },
   { href: "/events" as Route, label: "Events" },
   { href: "/settings" as Route, label: "Settings" }
@@ -22,6 +23,7 @@ const adminNavItems = [
   { href: "/drafts" as Route, label: "Drafts" },
   { href: "/events" as Route, label: "Events" },
   { href: "/jobs" as Route, label: "Publishing" },
+  { href: "/wire" as Route, label: "Wire Feed" },
   { href: "/settings" as Route, label: "Settings" }
 ];
 

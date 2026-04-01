@@ -1,5 +1,5 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-import { AuthMeResponse, CreatorSettings, CustomerDraftsPayload, CustomerHomePayload, DraftSummary, EventSummary, OnboardingStatus, PipelineRun, PublishJob, PublishLog, ReviewItem, SourceSummary } from "@/lib/types";
+import { AuthMeResponse, AutopostDashboard, CreatorSettings, CustomerDraftsPayload, CustomerHomePayload, DraftSummary, EventSummary, OnboardingStatus, PipelineRun, PublishJob, PublishLog, ReviewItem, SourceSummary, WireJob, WirePublishLog } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -132,6 +132,14 @@ export function getPublishLogs(accessToken?: string | null) {
   return fetchJson<PublishLog[]>("/publish-jobs/logs", { accessToken });
 }
 
+export function getWireJobs(accessToken?: string | null) {
+  return fetchJson<WireJob[]>("/publish-jobs/wire", { accessToken });
+}
+
+export function getWireLogs(accessToken?: string | null) {
+  return fetchJson<WirePublishLog[]>("/publish-jobs/wire/logs", { accessToken });
+}
+
 export function retryPublishJob(jobId: number) {
   return fetchJson<PublishJob>(`/publish-jobs/${jobId}/retry`, {
     method: "POST",
@@ -148,6 +156,19 @@ export function reschedulePublishJob(jobId: number, scheduledFor: string) {
 
 export function cancelPublishJob(jobId: number) {
   return fetchJson<PublishJob>(`/publish-jobs/${jobId}/cancel`, {
+    method: "POST"
+  });
+}
+
+export function retryWireJob(jobId: number) {
+  return fetchJson<WireJob>(`/publish-jobs/wire/${jobId}/retry`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export function cancelWireJob(jobId: number) {
+  return fetchJson<WireJob>(`/publish-jobs/wire/${jobId}/cancel`, {
     method: "POST"
   });
 }
@@ -170,6 +191,28 @@ export function getCurrentPipelineRun(accessToken?: string | null) {
 
 export function getCreatorSettings(accessToken?: string | null) {
   return fetchJson<CreatorSettings>("/settings/creator", { accessToken });
+}
+
+export function getAutopostDashboard(accessToken?: string | null) {
+  return fetchJson<AutopostDashboard>("/settings/autopost", { accessToken });
+}
+
+export function pauseAutopost() {
+  return fetchJson<AutopostDashboard>("/settings/autopost/pause", {
+    method: "POST"
+  });
+}
+
+export function resumeAutopost() {
+  return fetchJson<AutopostDashboard>("/settings/autopost/resume", {
+    method: "POST"
+  });
+}
+
+export function disconnectXAccount() {
+  return fetchJson<{ x_connected: boolean; autopost_enabled?: boolean }>("/settings/x/disconnect", {
+    method: "POST"
+  });
 }
 
 export function updateCreatorSettings(payload: CreatorSettingsUpdate) {

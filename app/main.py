@@ -50,6 +50,16 @@ def _run_engagement_fetch() -> None:
         logging.getLogger(__name__).exception("engagement fetch failed")
 
 
+def _run_wire_feed() -> None:
+    from app.wire_feed.runner import run_wire_cycle
+
+    try:
+        result = run_wire_cycle()
+        logging.getLogger(__name__).info("wire feed cycle complete: %s", result)
+    except Exception:
+        logging.getLogger(__name__).exception("wire feed cycle failed")
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     settings = get_settings()
@@ -70,10 +80,21 @@ async def _lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    if settings.wire_feed_enabled:
+        scheduler.add_job(
+            _run_wire_feed,
+            trigger="interval",
+            seconds=settings.wire_feed_interval_sec,
+            id="wire_feed_cycle",
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.start()
     logging.getLogger(__name__).info(
-        "Scheduler started — pipeline interval=%ds, engagement fetch every 1h",
+        "Scheduler started — pipeline interval=%ds, engagement fetch every 1h, wire feed enabled=%s interval=%ds",
         settings.pipeline_interval_sec,
+        settings.wire_feed_enabled,
+        settings.wire_feed_interval_sec,
     )
     yield
     scheduler.shutdown(wait=False)

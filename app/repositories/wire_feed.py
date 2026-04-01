@@ -1,0 +1,210 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import Select, func, select
+from sqlalchemy.orm import Session
+
+from app.models.wire_feed import WireCandidate, WireJob, WirePublishLog
+from app.wire_feed.pipeline import WirePipelineResult
+from app.wire_feed.policy import WirePostRecord, WireQueueDecision
+
+
+class WireCandidateRepository:
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def upsert_from_result(self, result: WirePipelineResult) -> WireCandidate:
+        candidate = self.get_by_external_id(result.external_id)
+        if candidate is None:
+            candidate = WireCandidate(
+                source_name=result.source_name,
+                external_id=result.external_id,
+                title=result.title,
+                ticker=result.ticker,
+                event_type=result.event_type,
+                dedupe_key=result.dedupe_key,
+                published_at=result.published_at,
+                importance_score=result.importance_score,
+                confidence_score=result.confidence_score,
+                draft_text=result.draft_text,
+                raw_payload={
+                    "subject_key": result.subject_key,
+                    "safety_flags": result.safety_flags,
+                },
+            )
+            self.db.add(candidate)
+            self.db.flush()
+            return candidate
+
+        candidate.title = result.title
+        candidate.ticker = result.ticker
+        candidate.event_type = result.event_type
+        candidate.dedupe_key = result.dedupe_key
+        candidate.published_at = result.published_at
+        candidate.importance_score = result.importance_score
+        candidate.confidence_score = result.confidence_score
+        candidate.draft_text = result.draft_text
+        candidate.raw_payload = {
+            **(candidate.raw_payload or {}),
+            "subject_key": result.subject_key,
+            "safety_flags": result.safety_flags,
+        }
+        self.db.flush()
+        return candidate
+
+    def get_by_external_id(self, external_id: str) -> WireCandidate | None:
+        stmt = select(WireCandidate).where(WireCandidate.external_id == external_id).limit(1)
+        return self.db.scalar(stmt)
+
+
+class WireJobRepository:
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def latest_for_candidate(self, candidate_id: int) -> WireJob | None:
+        stmt = (
+            select(WireJob)
+            .where(WireJob.candidate_id == candidate_id)
+            .order_by(WireJob.updated_at.desc(), WireJob.id.desc())
+            .limit(1)
+        )
+        return self.db.scalar(stmt)
+
+    def get(self, job_id: int) -> WireJob | None:
+        return self.db.get(WireJob, job_id)
+
+    def list_recent(self, limit: int = 50) -> list[WireJob]:
+        stmt = select(WireJob).order_by(WireJob.updated_at.desc(), WireJob.id.desc()).limit(limit)
+        return list(self.db.scalars(stmt))
+
+    def list_upcoming(self, limit: int = 3) -> list[tuple[WireCandidate, WireJob]]:
+        stmt: Select[tuple[WireCandidate, WireJob]] = (
+            select(WireCandidate, WireJob)
+            .join(WireJob, WireJob.candidate_id == WireCandidate.id)
+            .where(WireJob.status.in_(("queued", "publishing")))
+            .order_by(func.coalesce(WireJob.scheduled_for, WireJob.updated_at).asc(), WireJob.id.asc())
+            .limit(limit)
+        )
+        return list(self.db.execute(stmt).all())
+
+    def count_recent_failed(self, since: datetime) -> int:
+        stmt = select(func.count()).select_from(WireJob).where(
+            WireJob.status == "failed",
+            WireJob.updated_at >= since,
+        )
+        count = self.db.scalar(stmt)
+        return int(count or 0)
+
+    def record_decision(self, candidate: WireCandidate, decision: WireQueueDecision) -> WireJob:
+        latest = self.latest_for_candidate(candidate.id)
+        if latest and latest.status in {"queued", "publishing", "posted", "skipped", "failed", "cancelled"} and latest.result_message == decision.reason and latest.scheduled_for == decision.scheduled_for and latest.status == _decision_status(decision):
+            candidate.last_action = decision.action
+            candidate.last_reason = decision.reason
+            candidate.last_scheduled_for = decision.scheduled_for
+            self.db.flush()
+            return latest
+
+        if latest and latest.status in {"queued", "publishing"}:
+            latest.priority = decision.priority
+            latest.scheduled_for = decision.scheduled_for
+            latest.result_message = decision.reason
+            latest.status = _decision_status(decision)
+            candidate.last_action = decision.action
+            candidate.last_reason = decision.reason
+            candidate.last_scheduled_for = decision.scheduled_for
+            self.db.flush()
+            return latest
+
+        job = WireJob(
+            candidate_id=candidate.id,
+            status=_decision_status(decision),
+            priority=decision.priority,
+            scheduled_for=decision.scheduled_for,
+            result_message=decision.reason,
+        )
+        self.db.add(job)
+        candidate.last_action = decision.action
+        candidate.last_reason = decision.reason
+        candidate.last_scheduled_for = decision.scheduled_for
+        self.db.flush()
+        return job
+
+    def recent_post_records(self, since: datetime) -> list[WirePostRecord]:
+        stmt: Select[tuple[WireCandidate, WireJob]] = (
+            select(WireCandidate, WireJob)
+            .join(WireJob, WireJob.candidate_id == WireCandidate.id)
+            .where(
+                WireJob.status.in_(("queued", "posted", "publishing")),
+                func.coalesce(WireJob.scheduled_for, WireJob.updated_at) >= since,
+            )
+        )
+        rows = self.db.execute(stmt).all()
+        return [
+            WirePostRecord(
+                dedupe_key=candidate.dedupe_key,
+                posted_at=(job.scheduled_for or job.updated_at or datetime.now(timezone.utc)),
+            )
+            for candidate, job in rows
+        ]
+
+    def claim_ready(self, now: datetime, limit: int = 20) -> list[WireJob]:
+        stmt = (
+            select(WireJob)
+            .where(WireJob.status == "queued", WireJob.scheduled_for.is_not(None), WireJob.scheduled_for <= now)
+            .order_by(WireJob.scheduled_for.asc(), WireJob.id.asc())
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+        jobs = list(self.db.scalars(stmt))
+        for job in jobs:
+            job.status = "publishing"
+            job.attempt_count += 1
+        self.db.flush()
+        return jobs
+
+    def has_active_duplicate(self, dedupe_key: str, exclude_job_id: int | None = None) -> bool:
+        stmt = (
+            select(func.count())
+            .select_from(WireJob)
+            .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
+            .where(
+                WireCandidate.dedupe_key == dedupe_key,
+                WireJob.status.in_(("queued", "publishing", "posted")),
+            )
+        )
+        if exclude_job_id is not None:
+            stmt = stmt.where(WireJob.id != exclude_job_id)
+        count = self.db.scalar(stmt)
+        return bool(count)
+
+    def add_log(self, job_id: int, response_payload: dict, platform_post_id: str | None = None) -> WirePublishLog:
+        log = WirePublishLog(
+            wire_job_id=job_id,
+            platform_post_id=platform_post_id,
+            posted_at=datetime.now(timezone.utc),
+            response_payload=response_payload,
+        )
+        self.db.add(log)
+        self.db.flush()
+        return log
+
+    def list_logs_recent(self, limit: int = 50) -> list[WirePublishLog]:
+        stmt = select(WirePublishLog).order_by(WirePublishLog.posted_at.desc(), WirePublishLog.id.desc()).limit(limit)
+        return list(self.db.scalars(stmt))
+
+    def list_logs_with_candidates_recent(self, limit: int = 10) -> list[tuple[WirePublishLog, WireJob | None, WireCandidate | None]]:
+        stmt = (
+            select(WirePublishLog, WireJob, WireCandidate)
+            .join(WireJob, WireJob.id == WirePublishLog.wire_job_id)
+            .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
+            .order_by(WirePublishLog.posted_at.desc(), WirePublishLog.id.desc())
+            .limit(limit)
+        )
+        return list(self.db.execute(stmt).all())
+
+
+def _decision_status(decision: WireQueueDecision) -> str:
+    if decision.action == "skip":
+        return "skipped"
+    return "queued"

@@ -6,6 +6,7 @@ from app.models.job import PublishJob, PublishLog
 from app.models.pipeline_run import PipelineRun
 from app.models.review import ReviewQueueItem
 from app.models.source import Source, SourceItem
+from app.models.wire_feed import WireCandidate, WireJob, WirePublishLog
 
 __all__ = [
     "WorkspaceUser",
@@ -20,4 +21,7 @@ __all__ = [
     "ReviewQueueItem",
     "Source",
     "SourceItem",
+    "WireCandidate",
+    "WireJob",
+    "WirePublishLog",
 ]

@@ -81,6 +81,60 @@ export type PublishLog = {
   created_at: string | null;
 };
 
+export type WireCandidateSummary = {
+  id: number;
+  source_name: string;
+  external_id: string;
+  title: string;
+  ticker: string | null;
+  event_type: string;
+  dedupe_key: string;
+  importance_score: number;
+  confidence_score: number;
+  draft_text: string;
+  published_at: string | null;
+  last_action: string | null;
+  last_reason: string | null;
+  last_scheduled_for: string | null;
+};
+
+export type WireJob = {
+  id: number;
+  candidate_id: number;
+  status: string;
+  priority: string;
+  scheduled_for: string | null;
+  attempt_count: number;
+  last_error: string | null;
+  result_message: string | null;
+  idempotency_key: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  candidate: WireCandidateSummary | null;
+};
+
+export type WirePublishLog = {
+  id: number;
+  wire_job_id: number;
+  platform_post_id: string | null;
+  posted_at: string | null;
+  response_payload: Record<string, unknown>;
+  created_at: string | null;
+  job: {
+    id: number;
+    status: string;
+    priority: string;
+    scheduled_for: string | null;
+  } | null;
+  candidate: {
+    id: number;
+    title: string;
+    ticker: string | null;
+    draft_text: string;
+    source_name: string;
+  } | null;
+};
+
 export type CreatorSettings = {
   id: number;
   display_name: string;
@@ -117,6 +171,36 @@ export type OnboardingStatus = {
   publishing_ready: boolean;
   required: boolean;
   missing: string[];
+};
+
+export type AutopostDashboard = {
+  display_name: string | null;
+  x_connected: boolean;
+  autopost_enabled: boolean;
+  status: "setup_required" | "paused" | "active" | "needs_attention";
+  posting_window: {
+    start_hour: number;
+    end_hour: number;
+    timezone: string;
+  };
+  scan_interval_minutes: number;
+  next_posts: {
+    id: number;
+    status: string;
+    scheduled_for: string | null;
+    tweet_text: string;
+    source_title: string;
+    ticker: string | null;
+  }[];
+  recent_posts: {
+    id: number;
+    platform_post_id: string | null;
+    posted_at: string | null;
+    tweet_text: string | null;
+    source_title: string | null;
+    ticker: string | null;
+    x_url: string | null;
+  }[];
 };
 
 export type CustomerWorkspaceState =

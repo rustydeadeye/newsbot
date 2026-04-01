@@ -18,6 +18,7 @@ from app.services.ingestion.adapters import (
     MOSPIPressReleaseAdapter,
     NSECorporateFilingsAdapter,
     RSSSourceAdapter,
+    TradientMarketNewsAdapter,
 )
 from app.services.ingestion.base import FetchedItem
 
@@ -69,6 +70,13 @@ SOURCES: list[SourceDef] = [
         type="html",
         base_url="https://mospi.gov.in/press-release",
         adapter_cls=MOSPIPressReleaseAdapter,
+    ),
+    SourceDef(
+        key="tradient",
+        name="tradient_market_news",
+        type="json",
+        base_url="https://api.tradient.org/v1/api/market/news",
+        adapter_cls=TradientMarketNewsAdapter,
     ),
 ]
 

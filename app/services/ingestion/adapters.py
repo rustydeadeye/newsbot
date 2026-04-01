@@ -259,6 +259,32 @@ class PlaceholderHtmlAdapter(SourceAdapter):
         return []
 
 
+class TradientMarketNewsAdapter(SourceAdapter):
+    def fetch(self) -> list[FetchedItem]:
+        try:
+            response = _http_get_with_retry(
+                self.source.base_url,
+                headers={"Accept": "application/json", **DEFAULT_HEADERS},
+                timeout=20.0,
+                follow_redirects=True,
+            )
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Tradient market news returned HTTP %s", exc.response.status_code)
+            raise
+        except httpx.RequestError as exc:
+            logger.warning("Tradient market news request failed (%s)", type(exc).__name__)
+            raise
+
+        payload = response.json()
+        rows = ((payload.get("data") or {}).get("latest_news") or [])
+        items: list[FetchedItem] = []
+        for row in rows:
+            item = _tradient_news_item(self.source.base_url, row)
+            if item is not None:
+                items.append(item)
+        return items
+
+
 def get_adapter(source: Source) -> SourceAdapter:
     if source.name == "bse_announcements":
         return BSEMultiRSSAdapter(source)
@@ -268,6 +294,8 @@ def get_adapter(source: Source) -> SourceAdapter:
         return MOSPIPressReleaseAdapter(source)
     if source.name == "sebi_releases":
         return SEBIRSSAdapter(source)
+    if source.name == "tradient_market_news":
+        return TradientMarketNewsAdapter(source)
     if source.type == "rss":
         return RSSSourceAdapter(source)
     logger.warning("No adapter implemented for source=%s type=%s; no items will be fetched", source.name, source.type)
@@ -338,6 +366,49 @@ def _fetch_rss_items(feed_url: str) -> list[FetchedItem]:
             )
         )
     return items
+
+
+def _tradient_news_item(default_url: str, row: dict) -> FetchedItem | None:
+    news_object = row.get("news_object") if isinstance(row.get("news_object"), dict) else {}
+    title = str(news_object.get("title") or row.get("title") or "").strip()
+    if not title:
+        return None
+    stock_name = str(row.get("stock_name") or "").strip() or None
+    symbol = str(row.get("sm_symbol") or "").strip().upper() or None
+    publish_date = row.get("publish_date")
+    article_url = (
+        str(row.get("article_url") or row.get("url") or row.get("source_url") or "").strip()
+        or _tradient_article_url(row)
+        or default_url
+    )
+    raw_payload = {
+        "company": stock_name,
+        "ticker": symbol,
+        "symbol": symbol,
+        "article_url": article_url,
+        "document_url": article_url,
+        "source_ref": row.get("source") or row.get("category"),
+        "release_type": "market_news",
+        "category": row.get("category"),
+        "sub_category": row.get("sub_category"),
+        "text": news_object.get("text") or row.get("text"),
+        "publish_date": publish_date,
+        "nse_scrip_code": row.get("nse_scrip_code"),
+        "bse_scrip_code": row.get("bse_scrip_code"),
+        "display_symbol": row.get("display_symbol"),
+        "overall_sentiment": news_object.get("overall_sentiment") or row.get("overall_sentiment"),
+        "news_type": "tradient_market_news",
+    }
+    raw_payload = {key: value for key, value in raw_payload.items() if value not in (None, "", [])}
+    external_id_parts = [str(row.get("article_id") or symbol or stock_name or "news"), str(publish_date or "undated"), title]
+    external_id = "tradient:" + ":".join(part.replace(":", "-") for part in external_id_parts)
+    return FetchedItem(
+        external_id=external_id,
+        url=article_url,
+        title=title,
+        published_at=_parse_tradient_datetime(publish_date),
+        raw_payload=raw_payload,
+    )
 
 
 def _nse_section(title: str) -> str | None:
@@ -427,6 +498,35 @@ def _parse_date(value: str | None) -> datetime | None:
     if result is None:
         logger.warning("Unrecognised date format from source: %r", value)
     return result
+
+
+def _parse_tradient_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value) / 1000.0, tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            logger.warning("Unrecognised Tradient epoch datetime from source: %r", value)
+            return None
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        parsed = _parse_datetime(normalized) or _parse_date(normalized)
+    if parsed is None:
+        logger.warning("Unrecognised Tradient datetime from source: %r", value)
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _tradient_article_url(row: dict) -> str | None:
+    slug = str(row.get("article_slug") or "").strip()
+    if not slug:
+        return None
+    return f"https://tradient.org/news/{slug}"
 
 
 def _rss_payload(title: str, link: str, guid: str, pub_date: str | None, description: str | None) -> dict:

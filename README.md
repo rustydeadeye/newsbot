@@ -90,3 +90,43 @@ If your client supports Supabase OAuth directly, you can remove the `Authorizati
 The app is designed for Fly.io with one web process and one or more worker processes. Redis is not required; job claiming uses Postgres row locking.
 
 For posting to X, the app now expects OAuth 2.0 user-context tokens for the authenticated account. `X_ACCESS_TOKEN` is used for posting, and `X_REFRESH_TOKEN` is used to refresh it when X returns `401`. Keep both tokens out of git.
+
+### Separate Autopost Deployment
+
+The wire-feed autopost product can be deployed separately from the original review-first product.
+
+- Original product backend config: `fly.toml`
+- Original product frontend config: `netlify.toml`
+- Autopost product backend config: `fly.autopost.toml`
+- Autopost product frontend config: `netlify.autopost.toml`
+- Autopost Fly secret helper: `scripts/set-fly-secrets-autopost.sh`
+- Autopost frontend env example: `frontend/.env.autopost.example`
+
+Recommended separation:
+
+- Original product:
+  - Fly app: existing `financeai`
+  - Netlify site: existing dashboard site
+- Autopost product:
+  - Fly app: separate app such as `newsbot-autopost`
+  - Netlify site: separate site such as `newsbot-autopost.netlify.app`
+
+Important notes:
+
+- The new autopost branch can share the same Supabase project for now, but Fly and Netlify should be separate.
+- Update `FRONTEND_URL`, `CORS_ORIGINS`, and `X_REDIRECT_URI` so the new X OAuth flow returns to the autopost frontend instead of the old product.
+- The autopost backend is designed to run with `WIRE_FEED_ENABLED=true`.
+
+Example backend deploy:
+
+```bash
+fly launch --copy-config --config fly.autopost.toml --name newsbot-autopost
+bash scripts/set-fly-secrets-autopost.sh
+fly deploy --config fly.autopost.toml
+```
+
+Example frontend deploy:
+
+- create a separate Netlify site pointed at this repo
+- use `netlify.autopost.toml`
+- set frontend env vars from `frontend/.env.autopost.example`

@@ -70,6 +70,7 @@ def normalize_pending_items(db: Session, watchlist: set[str] | None = None) -> i
                     facts.get("ticker"),
                     watchlist,
                     latest_date=latest_date,
+                    headline=facts.get("headline"),
                 )
                 existing.status = "normalized"
             item.processed = True
@@ -90,6 +91,7 @@ def normalize_pending_items(db: Session, watchlist: set[str] | None = None) -> i
                 facts.get("ticker"),
                 watchlist,
                 latest_date=latest_date,
+                headline=facts.get("headline"),
             ),
             confidence_score=0.95 if source.name in SOURCE_PRIORITY else 0.70,
             dedupe_key=dedupe_key,

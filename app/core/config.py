@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     frontend_url: str = Field(default="http://localhost:3000", alias="FRONTEND_URL")
     auto_post_threshold: int = Field(default=80, alias="AUTO_POST_THRESHOLD")
     pipeline_interval_sec: int = Field(default=900, alias="PIPELINE_INTERVAL_SEC")
+    wire_feed_enabled: bool = Field(default=False, alias="WIRE_FEED_ENABLED")
+    wire_feed_interval_sec: int = Field(default=900, alias="WIRE_FEED_INTERVAL_SEC")
     auth_admin_emails: str = Field(default="", alias="AUTH_ADMIN_EMAILS")
     auth_auto_provision_users: bool = Field(default=True, alias="AUTH_AUTO_PROVISION_USERS")
     app_env: str = Field(default="development", alias="APP_ENV")

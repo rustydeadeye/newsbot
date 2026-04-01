@@ -48,3 +48,8 @@ class CustomerProfileRepository:
             CustomerProfile.automation_mode != "manual_review_only",
         )
         return list(self.db.scalars(stmt))
+
+    def has_active_autopost_customer(self) -> bool:
+        stmt = select(CustomerProfile).where(CustomerProfile.auto_post_enabled.is_(True))
+        profiles = list(self.db.scalars(stmt))
+        return any(bool((profile.token_store or {}).get("x_access_token")) for profile in profiles)

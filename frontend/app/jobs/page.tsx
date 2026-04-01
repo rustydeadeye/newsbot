@@ -51,6 +51,7 @@ export default async function JobsPage() {
         <KpiCard label="Queued" value={queued} detail="Waiting to publish" tone={queued > 0 ? "warning" : "calm"} />
         <KpiCard label="In Flight" value={publishing} detail="Currently publishing" />
         <KpiCard label="Failed" value={failed} detail="Needs intervention" tone={failed > 0 ? "danger" : "calm"} />
+        <KpiCard label="Posted" value={posted} detail="Recent published jobs" />
         <KpiCard label="Recent Logs" value={logs.length} detail="Recent posted activity" />
       </div>
       <StatusPanel

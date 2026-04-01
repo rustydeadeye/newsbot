@@ -31,6 +31,7 @@ from app.services.ingestion.adapters import (
     NSECorporateFilingsAdapter,
     RSSSourceAdapter,
     SEBIRSSAdapter,
+    TradientMarketNewsAdapter,
 )
 from app.services.ingestion.base import FetchedItem
 from app.services.normalization.dedupe import make_dedupe_key
@@ -45,6 +46,7 @@ SOURCES = [
     {"key": "bse",   "name": "bse_announcements",      "type": "rss",  "url": "https://www.bseindia.com/data/xml/announcements.xml","cls": BSEMultiRSSAdapter},
     {"key": "nse",   "name": "nse_corporate_filings",  "type": "html", "url": "https://www.nseindia.com/companies-listing/corporate-filings-application", "cls": NSECorporateFilingsAdapter},
     {"key": "mospi", "name": "mospi_releases",          "type": "html", "url": "https://mospi.gov.in/press-release",                "cls": MOSPIPressReleaseAdapter},
+    {"key": "tradient", "name": "tradient_market_news", "type": "json", "url": "https://api.tradient.org/v1/api/market/news", "cls": TradientMarketNewsAdapter},
 ]
 
 
@@ -117,7 +119,7 @@ def fetch_and_process(src: dict, drafting: DraftingService) -> list[PipelineResu
         source_item = _fake_source_item(fetched)
         facts = extract_facts(source, source_item)
         fallback_confidence = 0.95 if src["name"] in SOURCE_PRIORITY else 0.70
-        importance = score_event(src["name"], facts["event_class"], facts.get("ticker"))
+        importance = score_event(src["name"], facts["event_class"], facts.get("ticker"), headline=facts.get("headline"))
 
         event = _fake_event(facts, importance, fallback_confidence)
         draft = drafting.make_draft_post(event)
@@ -187,7 +189,7 @@ def print_result(r: PipelineResult, index: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", help="Only run one source key (rbi/bse/nse/mospi)")
+    parser.add_argument("--source", help="Only run one source key (rbi/sebi/bse/nse/mospi/tradient)")
     parser.add_argument("--limit", type=int, default=10, help="Show top N results by score (default 10)")
     parser.add_argument("--all", action="store_true", help="Show all results, not just top N")
     parser.add_argument("--openai-key", help="OpenAI API key (overrides env)")

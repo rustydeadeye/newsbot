@@ -2,6 +2,7 @@ import base64
 import hashlib
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfoNotFoundError
 
@@ -16,6 +17,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.repositories.creators import CreatorSettingsRepository
 from app.repositories.customers import CustomerProfileRepository
+from app.repositories.wire_feed import WireJobRepository
 
 router = APIRouter()
 
@@ -34,6 +36,58 @@ def _prune_pkce_store() -> None:
         del _pkce_store[k]
 
 
+def _autopost_status(profile: dict, recent_failed: int) -> str:
+    if not profile.get("x_connected") or not profile.get("display_name"):
+        return "setup_required"
+    if recent_failed > 0 and profile.get("auto_post_enabled"):
+        return "needs_attention"
+    return "active" if profile.get("auto_post_enabled") else "paused"
+
+
+def _autopost_dashboard_payload(db: Session, viewer: ViewerContext) -> dict:
+    profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(
+        viewer.workspace_user_id,
+        default_display_name=viewer.display_name,
+    )
+    job_repo = WireJobRepository(db)
+    now = datetime.now(timezone.utc)
+    profile_payload = profile.to_dict()
+    next_posts = [
+        {
+            "id": job.id,
+            "status": job.status,
+            "scheduled_for": job.scheduled_for.isoformat() if job.scheduled_for else None,
+            "tweet_text": candidate.draft_text,
+            "source_title": candidate.title,
+            "ticker": candidate.ticker,
+        }
+        for candidate, job in job_repo.list_upcoming(limit=3)
+    ]
+    recent_posts = [
+        {
+            "id": log.id,
+            "platform_post_id": log.platform_post_id,
+            "posted_at": log.posted_at.isoformat() if log.posted_at else None,
+            "tweet_text": candidate.draft_text if candidate else None,
+            "source_title": candidate.title if candidate else None,
+            "ticker": candidate.ticker if candidate else None,
+            "x_url": f"https://x.com/i/web/status/{log.platform_post_id}" if log.platform_post_id else None,
+        }
+        for log, _job, candidate in job_repo.list_logs_with_candidates_recent(limit=10)
+    ]
+    recent_failed = job_repo.count_recent_failed(now - timedelta(hours=24))
+    return {
+        "display_name": profile_payload.get("display_name"),
+        "x_connected": profile_payload.get("x_connected"),
+        "autopost_enabled": profile.auto_post_enabled,
+        "status": _autopost_status(profile_payload, recent_failed),
+        "posting_window": {"start_hour": 8, "end_hour": 20, "timezone": "Asia/Kolkata"},
+        "scan_interval_minutes": max(1, get_settings().wire_feed_interval_sec // 60),
+        "next_posts": next_posts,
+        "recent_posts": recent_posts,
+    }
+
+
 @router.get("/creator")
 def get_creator_settings(
     db: Session = Depends(get_db),
@@ -49,6 +103,48 @@ def get_creator_settings(
     settings = CreatorSettingsRepository(db).get_or_create_default()
     db.commit()
     return settings.to_dict()
+
+
+@router.get("/autopost")
+def get_autopost_dashboard(
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> dict:
+    if not viewer.is_customer:
+        raise HTTPException(status_code=403, detail="Customer access required")
+    payload = _autopost_dashboard_payload(db, viewer)
+    db.commit()
+    return payload
+
+
+@router.post("/autopost/pause")
+def pause_autopost(
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> dict:
+    if not viewer.is_customer:
+        raise HTTPException(status_code=403, detail="Customer access required")
+    repo = CustomerProfileRepository(db)
+    profile = repo.get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
+    profile.auto_post_enabled = False
+    db.commit()
+    return _autopost_dashboard_payload(db, viewer)
+
+
+@router.post("/autopost/resume")
+def resume_autopost(
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> dict:
+    if not viewer.is_customer:
+        raise HTTPException(status_code=403, detail="Customer access required")
+    repo = CustomerProfileRepository(db)
+    profile = repo.get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
+    if not profile.display_name or not (profile.token_store or {}).get("x_access_token"):
+        raise HTTPException(status_code=409, detail="Complete setup before starting autoposting")
+    profile.auto_post_enabled = True
+    db.commit()
+    return _autopost_dashboard_payload(db, viewer)
 
 
 @router.put("/creator")
@@ -153,6 +249,32 @@ def x_oauth_connect(
     }
     auth_url = f"{_X_AUTH_URL}?{urlencode(params)}"
     return {"auth_url": auth_url}
+
+
+@router.post("/x/disconnect")
+def x_disconnect(
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> dict:
+    if viewer.is_customer:
+        repo = CustomerProfileRepository(db)
+        profile = repo.get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
+        store = dict(profile.token_store or {})
+        store.pop("x_access_token", None)
+        store.pop("x_refresh_token", None)
+        profile.token_store = store
+        profile.auto_post_enabled = False
+        db.commit()
+        return {"x_connected": False, "autopost_enabled": False}
+
+    repo = CreatorSettingsRepository(db)
+    creator = repo.get_or_create_default()
+    store = dict(creator.token_store or {})
+    store.pop("x_access_token", None)
+    store.pop("x_refresh_token", None)
+    creator.token_store = store
+    db.commit()
+    return {"x_connected": False}
 
 
 @router.get("/x/callback")

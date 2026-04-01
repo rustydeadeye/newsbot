@@ -1,0 +1,284 @@
+from app.wire_feed.runner import run_wire_cycle
+
+
+def test_publish_due_jobs_requeues_runtime_errors_before_fail(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from app.wire_feed.runner import _publish_due_jobs
+
+    class Candidate:
+        id = 1
+        dedupe_key = "earnings|coalindia|offtake"
+        draft_text = "COAL INDIA: MARCH OFFTAKE UP 0.7% TO 69.5 MT"
+
+    class Job:
+        id = 10
+        candidate_id = 1
+        attempt_count = 1
+        status = "publishing"
+        scheduled_for = None
+        last_error = None
+        result_message = None
+        idempotency_key = "abc"
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def claim_ready(self, now, limit=20):
+            return [job]
+
+        def has_active_duplicate(self, dedupe_key, exclude_job_id=None):
+            return False
+
+        def add_log(self, job_id, response, platform_post_id=None):
+            return None
+
+    class FakePublisher:
+        def publish(self, text, idempotency_key=None):
+            raise RuntimeError("x_api_request_error:ConnectError")
+
+    class FakeDb:
+        def get(self, model, ident):
+            return candidate if ident == 1 else None
+
+        def commit(self):
+            return None
+
+    candidate = Candidate()
+    job = Job()
+
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr("app.wire_feed.runner.XPublisher", lambda: FakePublisher())
+
+    result = _publish_due_jobs(FakeDb(), datetime.now(timezone.utc))
+
+    assert result == {"posted": 0, "failed": 0}
+    assert job.status == "queued"
+    assert job.result_message == "retry_scheduled"
+    assert job.last_error == "x_api_request_error:ConnectError"
+
+
+def test_publish_due_jobs_skips_active_duplicate(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from app.wire_feed.runner import _publish_due_jobs
+
+    class Candidate:
+        id = 1
+        dedupe_key = "earnings|coalindia|offtake"
+        draft_text = "COAL INDIA: MARCH OFFTAKE UP 0.7% TO 69.5 MT"
+
+    class Job:
+        id = 11
+        candidate_id = 1
+        attempt_count = 1
+        status = "publishing"
+        scheduled_for = None
+        last_error = None
+        result_message = None
+        idempotency_key = "def"
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def claim_ready(self, now, limit=20):
+            return [job]
+
+        def has_active_duplicate(self, dedupe_key, exclude_job_id=None):
+            return True
+
+        def add_log(self, job_id, response, platform_post_id=None):
+            return None
+
+    class FakeDb:
+        def get(self, model, ident):
+            return candidate if ident == 1 else None
+
+        def commit(self):
+            return None
+
+    candidate = Candidate()
+    job = Job()
+
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr("app.wire_feed.runner.XPublisher", lambda: None)
+
+    result = _publish_due_jobs(FakeDb(), datetime.now(timezone.utc))
+
+    assert result == {"posted": 0, "failed": 0}
+    assert job.status == "skipped"
+    assert job.result_message == "duplicate_active_job"
+
+
+def test_run_wire_cycle_does_not_publish_when_customer_autopost_disabled(monkeypatch) -> None:
+    class StubSource:
+        key = "tradient"
+
+    class StubDrafting:
+        pass
+
+    monkeypatch.setattr("app.wire_feed.runner.get_wire_sources", lambda: [StubSource()])
+    monkeypatch.setattr("app.wire_feed.runner.DraftingService", lambda: StubDrafting())
+    monkeypatch.setattr(
+        "app.wire_feed.runner.fetch_and_process",
+        lambda source, drafting: [],
+    )
+    monkeypatch.setattr("app.wire_feed.runner.plan_wire_queue", lambda results, recent_posts, now, settings: [])
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self):
+            return None
+
+        def get(self, model, ident):
+            return None
+
+    class FakeCandidateRepo:
+        def __init__(self, db):
+            self.db = db
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def recent_post_records(self, since):
+            return []
+
+    class FakeCustomerRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def has_active_autopost_customer(self):
+            return False
+
+    monkeypatch.setattr("app.wire_feed.runner.SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr("app.wire_feed.runner.WireCandidateRepository", FakeCandidateRepo)
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr("app.wire_feed.runner.CustomerProfileRepository", FakeCustomerRepo)
+    publish_calls = {"count": 0}
+
+    def fake_publish_due_jobs(db, now):
+        publish_calls["count"] += 1
+        return {"posted": 0, "failed": 0}
+
+    monkeypatch.setattr("app.wire_feed.runner._publish_due_jobs", fake_publish_due_jobs)
+
+    summary = run_wire_cycle()
+
+    assert publish_calls["count"] == 0
+    assert summary["posted"] == 0
+
+
+def test_run_wire_cycle_returns_summary(monkeypatch) -> None:
+    class StubSource:
+        key = "tradient"
+
+    class StubDrafting:
+        pass
+
+    monkeypatch.setattr("app.wire_feed.runner.get_wire_sources", lambda: [StubSource()])
+    monkeypatch.setattr("app.wire_feed.runner.DraftingService", lambda: StubDrafting())
+    monkeypatch.setattr(
+        "app.wire_feed.runner.fetch_and_process",
+        lambda source, drafting: [
+            type(
+                "Result",
+                (),
+                {
+                    "external_id": "tradient:1",
+                    "source_name": "tradient_market_news",
+                    "title": "JK Tyre update",
+                    "event_type": "default_fraud",
+                    "dedupe_key": "default_fraud|jktyre|gst",
+                    "subject_key": "gst",
+                    "ticker": "JKTYRE",
+                    "importance_score": 100,
+                    "confidence_score": 0.95,
+                    "would_auto_post": True,
+                    "review_reason": None,
+                    "draft_text": "JK TYRE: GST DEMAND ORDER OF RS 1.39 CRORE",
+                    "safety_flags": {},
+                    "published_at": None,
+                },
+            )()
+        ],
+    )
+    monkeypatch.setattr(
+        "app.wire_feed.runner.plan_wire_queue",
+        lambda results, recent_posts, now, settings: [
+            type(
+                "Decision",
+                (),
+                {
+                    "action": "post_now",
+                    "priority": "breaking",
+                    "scheduled_for": now,
+                    "reason": None,
+                    "result": type(
+                        "QueuedResult",
+                        (),
+                        {
+                            "title": "JK Tyre update",
+                            "draft_text": "JK TYRE: GST DEMAND ORDER OF RS 1.39 CRORE",
+                            "importance_score": 100,
+                        },
+                    )(),
+                },
+            )()
+        ],
+    )
+    monkeypatch.setattr("app.wire_feed.runner._publish_due_jobs", lambda db, now: {"posted": 1, "failed": 0})
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self):
+            return None
+
+        def get(self, model, ident):
+            return None
+
+    monkeypatch.setattr("app.wire_feed.runner.SessionLocal", lambda: FakeSession())
+
+    class FakeCandidateRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def upsert_from_result(self, result):
+            return type("Candidate", (), {"id": 1})()
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def recent_post_records(self, since):
+            return []
+
+        def record_decision(self, candidate, decision):
+            return None
+
+    monkeypatch.setattr("app.wire_feed.runner.WireCandidateRepository", FakeCandidateRepo)
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr(
+        "app.wire_feed.runner.CustomerProfileRepository",
+        lambda db: type("CustomerRepo", (), {"has_active_autopost_customer": lambda self: True})(),
+    )
+
+    summary = run_wire_cycle()
+
+    assert summary["sources_processed"] == 1
+    assert summary["post_now"] == 1
+    assert summary["queued"] == 0
+    assert summary["skipped"] == 0
+    assert summary["posted"] == 1

@@ -116,10 +116,9 @@ class DraftingService:
         if template_text:
             return template_text
         headline = str(facts.get("headline", "Market update")).strip().rstrip(".")
-        source_name = self._display_source_name(facts)
         if headline:
-            return f"{headline}. Source: {source_name}."
-        return f"Market update. Source: {source_name}."
+            return self._with_optional_source(headline, facts)
+        return self._with_optional_source("Market update", facts)
 
     def _safety_flags(self, text: str) -> dict:
         lowered = text.lower()
@@ -139,11 +138,12 @@ class DraftingService:
         cleaned = re.sub(r"(?i)\bSEBI will issue\b", "SEBI to issue", cleaned)
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
         cleaned = cleaned.rstrip("-–| ").strip()
-        if len(cleaned) > 240:
-            truncated = cleaned[:237]
+        max_len = 220 if self._omit_source_attribution(facts) else 240
+        if len(cleaned) > max_len:
+            truncated = cleaned[: max_len - 3]
             last_space = truncated.rfind(" ")
             cleaned = (truncated[:last_space] if last_space > 180 else truncated).rstrip() + "..."
-        if "source:" not in cleaned.lower() and facts.get("attribution_required"):
+        if not self._omit_source_attribution(facts) and "source:" not in cleaned.lower() and facts.get("attribution_required"):
             source_name = self._display_source_name(facts)
             separator = "" if cleaned.endswith(".") else "."
             cleaned = f"{cleaned}{separator} Source: {source_name}."
@@ -156,12 +156,16 @@ class DraftingService:
             "sebi_releases": "SEBI",
             "nse_corporate_filings": "an NSE filing",
             "bse_announcements": "a BSE filing",
+            "tradient_market_news": "Tradient",
             "pib_economy": "PIB",
             "mospi_releases": "MOSPI",
         }
         return mapping.get(source_name, source_name.replace("_", " ").upper())
 
     def _template_text(self, facts: dict) -> str | None:
+        wire_text = self._wire_template(facts)
+        if wire_text:
+            return wire_text
         event_type = str(facts.get("event_class") or "")
         if event_type in {"rbi_policy", "macro_release"}:
             return self._macro_template(facts)
@@ -191,23 +195,23 @@ class DraftingService:
                 body = self._headline_rewrite(headline, [(r"(?i)^result of ", ""), (r"(?i)^RBI ", "RBI ")])
                 body = re.sub(r"(?i)^the\s+", "", body)
                 body = body[0].lower() + body[1:] if body else body
-                return f"RBI releases the {body[0].lower() + body[1:] if body.startswith('Result') else body}. Source: RBI."
+                return self._with_optional_source(f"RBI releases the {body[0].lower() + body[1:] if body.startswith('Result') else body}", facts, source_override="RBI")
             if "auction" in lowered and ("conduct" in lowered or "calendar" in lowered):
                 body = self._headline_rewrite(headline, [(r"(?i)^calendar for ", ""), (r"(?i)^RBI to ", "RBI to ")])
                 if body.lower().startswith("auction"):
-                    return f"RBI releases the {body.lower()}. Source: RBI."
-                return f"{body}. Source: RBI."
+                    return self._with_optional_source(f"RBI releases the {body.lower()}", facts, source_override="RBI")
+                return self._with_optional_source(body, facts, source_override="RBI")
             if "repo rate" in lowered or "monetary policy" in lowered:
-                return f"{headline}. Source: RBI."
-        return f"{headline}. Source: {source_name}."
+                return self._with_optional_source(headline, facts, source_override="RBI")
+        return self._with_optional_source(headline, facts, source_override=source_name)
 
     def _penalty_template(self, facts: dict) -> str | None:
         headline = self._clean_headline(facts)
         if not headline:
             return None
         if not headline.startswith("RBI"):
-            return f"RBI {headline[0].lower() + headline[1:]}. Source: RBI."
-        return f"{headline}. Source: RBI."
+            return self._with_optional_source(f"RBI {headline[0].lower() + headline[1:]}", facts, source_override="RBI")
+        return self._with_optional_source(headline, facts, source_override="RBI")
 
     def _regulatory_template(self, facts: dict) -> str | None:
         headline = self._clean_headline(facts)
@@ -215,29 +219,30 @@ class DraftingService:
         if not headline:
             return None
         if source_name == "SEBI" and not headline.startswith("SEBI"):
-            return f"SEBI {headline[0].lower() + headline[1:]}. Source: SEBI."
-        return f"{headline}. Source: {source_name}."
+            return self._with_optional_source(f"SEBI {headline[0].lower() + headline[1:]}", facts, source_override="SEBI")
+        return self._with_optional_source(headline, facts, source_override=source_name)
 
     def _earnings_template(self, facts: dict) -> str | None:
+        headline = self._clean_headline(facts)
+        if self._should_preserve_company_wire_headline(headline):
+            return self._with_optional_source(headline, facts)
         company = self._company_display(facts)
         period = facts.get("period")
         if company and period:
-            return f"{company}: {period} results filed. Source: {self._display_source_name(facts)}."
-        headline = self._clean_headline(facts)
+            return self._with_optional_source(f"{company}: {period} results filed", facts)
         if headline:
-            return f"{headline}. Source: {self._display_source_name(facts)}."
+            return self._with_optional_source(headline, facts)
         return None
 
     def _fund_notice_template(self, facts: dict) -> str | None:
         headline = self._clean_headline(facts)
-        source_name = self._display_source_name(facts)
         if not headline:
             return None
         cleaned = re.sub(r"(?i)\breinvestment of idcw\b", "IDCW reinvestment", headline)
         cleaned = re.sub(r"(?i)\bpayout of idcw\b", "IDCW payout", cleaned)
         cleaned = re.sub(r"(?i)\bof idcw\b", "IDCW", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        return f"{cleaned}. Source: {source_name}."
+        return self._with_optional_source(cleaned, facts)
 
     def _corporate_action_template(self, facts: dict) -> str | None:
         company = self._company_display(facts)
@@ -251,27 +256,470 @@ class DraftingService:
             if per_share:
                 amount = f"{per_share.get('currency')} {per_share.get('value')}"
                 if event_date:
-                    return f"{company}: dividend {amount}/share; ex-date {event_date}. Source: {source_name}."
-                return f"{company}: dividend {amount}/share announced. Source: {source_name}."
+                    return self._with_optional_source(f"{company}: dividend {amount}/share; ex-date {event_date}", facts, source_override=source_name)
+                return self._with_optional_source(f"{company}: dividend {amount}/share announced", facts, source_override=source_name)
 
         if event_type == "bonus_split" and company:
             ratio = next((item for item in numbers if item.get("type") == "ratio"), None)
             if ratio and event_date:
-                return f"{company}: bonus issue ratio {ratio.get('value')}; ex-date {event_date}. Source: {source_name}."
+                return self._with_optional_source(f"{company}: bonus issue ratio {ratio.get('value')}; ex-date {event_date}", facts, source_override=source_name)
             if ratio:
-                return f"{company}: bonus issue ratio {ratio.get('value')}. Source: {source_name}."
+                return self._with_optional_source(f"{company}: bonus issue ratio {ratio.get('value')}", facts, source_override=source_name)
 
         headline = self._clean_headline(facts)
         if headline:
-            return f"{headline}. Source: {source_name}."
+            return self._with_optional_source(headline, facts, source_override=source_name)
         return None
 
     def _company_update_template(self, facts: dict) -> str | None:
         headline = self._clean_headline(facts)
-        source_name = self._display_source_name(facts)
         if headline:
-            return f"{headline}. Source: {source_name}."
+            return self._with_optional_source(headline, facts)
         return None
+
+    def _wire_template(self, facts: dict) -> str | None:
+        wire_from_facts = self._wire_from_facts(facts)
+        if wire_from_facts:
+            return wire_from_facts
+        headline = self._clean_headline(facts)
+        context = self._wire_context_text(facts)
+        if not headline and not context:
+            return None
+        company = self._company_wire_label(facts)
+        if not company:
+            return None
+
+        sales_text = self._sales_wire_text(headline, context, company)
+        if sales_text:
+            return sales_text
+
+        turnover_text = self._turnover_wire_text(headline, context, company)
+        if turnover_text:
+            return turnover_text
+
+        production_text = self._production_wire_text(headline, context, company)
+        if production_text:
+            return production_text
+
+        penalty_text = self._penalty_wire_text(headline, context, company)
+        if penalty_text:
+            return penalty_text
+
+        order_text = self._order_wire_text(headline, context, company)
+        if order_text:
+            return order_text
+
+        fundraise_text = self._fundraise_wire_text(headline, context, company)
+        if fundraise_text:
+            return fundraise_text
+
+        return None
+
+    def _wire_from_facts(self, facts: dict) -> str | None:
+        wire_facts = facts.get("wire_facts") or {}
+        kind = str(wire_facts.get("kind") or "")
+        subject = str(wire_facts.get("subject_label") or self._company_wire_label(facts) or "").strip()
+        if not kind or not subject:
+            return None
+
+        if kind == "sales_update":
+            period = str(wire_facts.get("period") or "").strip()
+            metric = str(wire_facts.get("metric_label") or "SALES").strip()
+            current = str(wire_facts.get("current_value") or "").strip()
+            prior = str(wire_facts.get("prior_value") or "").strip()
+            unit = str(wire_facts.get("unit") or "").strip()
+            change_pct = str(wire_facts.get("change_pct") or "").strip()
+            comparison = str(wire_facts.get("comparison_label") or "YOY").strip()
+            estimate = str(wire_facts.get("estimate_value") or "").strip()
+            if current and prior and unit:
+                base = f"{subject}: {period + ' ' if period else ''}{metric} {current} {unit} VS {prior} {unit} ({comparison})"
+                if estimate:
+                    base += f"; EST {estimate}"
+                secondary_value = str(wire_facts.get("secondary_metric_value") or "").strip()
+                secondary_label = str(wire_facts.get("secondary_metric_label") or "").strip()
+                secondary_unit = str(wire_facts.get("secondary_metric_unit") or "").strip()
+                if secondary_value and secondary_label:
+                    base += f"; {secondary_label} {secondary_value}{f' {secondary_unit}' if secondary_unit else ''}"
+                return base
+            if current and change_pct and unit:
+                return f"{subject}: {period + ' ' if period else ''}{metric} UP {change_pct} TO {current} {unit}"
+            if current and metric:
+                return f"{subject}: {period + ' ' if period else ''}{metric} AT {current}"
+
+        if kind == "production_update":
+            period = str(wire_facts.get("period") or "").strip()
+            metric = str(wire_facts.get("metric_label") or "PRODUCTION").strip()
+            current = str(wire_facts.get("current_value") or "").strip()
+            change_pct = str(wire_facts.get("change_pct") or "").strip()
+            guidance = str(wire_facts.get("guidance_value") or "").strip()
+            if current:
+                base = f"{subject}: {period + ' ' if period else ''}{metric} AT {current}"
+                if guidance:
+                    base += f" VS GUIDANCE {guidance}"
+                return base
+            if change_pct:
+                base = f"{subject}: {period + ' ' if period else ''}{metric} UP {change_pct} YOY"
+                if guidance:
+                    base += f"; VS GUIDANCE {guidance}"
+                return base
+
+        if kind == "offtake_update":
+            period = str(wire_facts.get("period") or "").strip()
+            current = str(wire_facts.get("current_value") or "").strip()
+            change_pct = str(wire_facts.get("change_pct") or "").strip()
+            if current and change_pct:
+                return f"{subject}: {period + ' ' if period else ''}OFFTAKE UP {change_pct} TO {current}"
+
+        if kind == "outlook_update":
+            period = str(wire_facts.get("period") or "").strip()
+            metric = str(wire_facts.get("metric_label") or "OUTLOOK").strip()
+            current = str(wire_facts.get("current_value") or "").strip()
+            unit = str(wire_facts.get("unit") or "").strip()
+            if current:
+                suffix = unit if unit and not current.endswith(unit) else ""
+                return f"{subject}: {period + ' ' if period else ''}{metric} SEEN AT {current}{suffix}"
+
+        if kind == "order_win":
+            amount = str(wire_facts.get("amount_value") or "").strip()
+            body = str(wire_facts.get("counterparty_or_body") or "").strip()
+            metric = str(wire_facts.get("metric_label") or "ORDER").strip()
+            if amount and body:
+                return f"{subject}: WINS {body} {metric} WORTH {amount}"
+            if amount:
+                return f"{subject}: {metric} WORTH {amount}"
+
+        if kind == "tax_demand":
+            amount = str(wire_facts.get("amount_value") or "").strip()
+            metric = str(wire_facts.get("metric_label") or "GST DEMAND ORDER").strip()
+            if amount:
+                return f"{subject}: {metric} OF {amount}"
+
+        return None
+
+    def _sales_wire_text(self, headline: str, context: str, company: str) -> str | None:
+        detailed_match = re.search(
+            r"(?P<period>MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER|Q\d)\s+total\s+sales\s+(?:at\s+)?(?P<current>[\d,]+)\s+units?\s+vs\s+(?P<prior>[\d,]+)\s+units?(?:\s*\((?P<comp>YOY)\))?(?:;\s*est\.?\s*(?P<est>[\d,]+))?",
+            context,
+            re.IGNORECASE,
+        )
+        if detailed_match:
+            period = detailed_match.group("period").upper()
+            current = detailed_match.group("current")
+            prior = detailed_match.group("prior")
+            comp = detailed_match.group("comp") or "YOY"
+            est = detailed_match.group("est")
+            base = f"{company}: {period} TOTAL SALES {current} UNITS VS {prior} UNITS ({comp.upper()})"
+            if est:
+                base += f"; EST {est}"
+            extra = self._sales_extra_clause(context)
+            if extra and extra not in base:
+                base += f"; {extra}"
+            return base
+
+        rise_match = re.search(
+            r"(?P<period>MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)?\s*sales\s+(?:rise|up)\s+(?P<pct>[\d.]+%)\s+to\s+(?P<current>[\d,]+)\s+units?",
+            context,
+            re.IGNORECASE,
+        )
+        if rise_match:
+            period = (rise_match.group("period") or "").upper().strip()
+            pct = rise_match.group("pct")
+            current = rise_match.group("current")
+            prefix = f"{period} " if period else ""
+            return f"{company}: {prefix}SALES UP {pct} TO {current} UNITS"
+
+        outlook_match = re.search(
+            r"(?P<pct>[\d.]+(?:-[\d.]+)?)%\s+(?:bank\s+)?loan growth\s+for\s+(?P<period>FY\d+)",
+            context,
+            re.IGNORECASE,
+        )
+        if outlook_match:
+            pct = outlook_match.group("pct")
+            period = outlook_match.group("period").upper()
+            return f"{company}: {period} LOAN GROWTH SEEN AT {pct}%"
+
+        match = re.match(
+            r"^(?P<name>.+?)\s+(?:achieves\s+record\s+)?(?P<period>Q\d|Q4|Q3|Q2|Q1|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)?\s*(?P<label>domestic sales|total sales)$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            period = (match.group("period") or "").upper().strip()
+            label = match.group("label").upper()
+            prefix = f"{period} " if period else ""
+            record = "RECORD " if "record" in headline.lower() else ""
+            return f"{company}: {record}{prefix}{label}"
+
+        if "sales" in headline.lower() and ":" in headline:
+            return self._headline_as_wire(headline)
+        return None
+
+    def _turnover_wire_text(self, headline: str, context: str, company: str) -> str | None:
+        match = re.search(
+            r"turnover\s+(?:in|for)\s+(?P<period>FY\d+)[,:\s]+(?:at\s+)?(?P<value>[₹Rsrs0-9,.\sA-Za-z]+?)(?:,|\s+)up\s+(?P<pct>[\d.]+%)",
+            context,
+            re.IGNORECASE,
+        )
+        if match:
+            value = self._normalize_money(match.group("value"))
+            period = match.group("period").upper()
+            pct = match.group("pct")
+            base = f"{company}: {period} TURNOVER AT {value}, UP {pct}"
+            extra = self._ebitda_extra_clause(context)
+            if extra:
+                base += f"; {extra}"
+            return base
+
+        match = re.match(
+            r"^(?P<name>.+?)\s+reports\s+(?P<value>[₹Rsrs0-9,.\sA-Za-z]+)\s+turnover\s+in\s+(?P<period>FY\d+),\s+up\s+(?P<pct>[\d.]+%)",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            value = self._normalize_money(match.group("value"))
+            period = match.group("period").upper()
+            pct = match.group("pct")
+            return f"{company}: {period} TURNOVER AT {value}, UP {pct}"
+        return None
+
+    def _production_wire_text(self, headline: str, context: str, company: str) -> str | None:
+        match = re.search(
+            r"(?P<product>iron ore pellets?|iron ore|dri|steel|pellets?)\s+production\s+at\s+(?P<current>[\d.,]+\s*(?:mt|mmt|ton|tons|units?))(?:\s+vs\s+guidance(?:\s+of)?\s+(?P<guidance>[\d.,]+\s*(?:mt|mmt|ton|tons|units?)))?",
+            context,
+            re.IGNORECASE,
+        )
+        if match:
+            product = match.group("product").upper()
+            current = match.group("current").upper()
+            guidance = match.group("guidance")
+            base = f"{company}: {product} PRODUCTION AT {current}"
+            if guidance:
+                base += f" VS GUIDANCE {guidance.upper()}"
+            return base
+
+        match = re.search(
+            r"(?P<product>dri|iron ore pellets?|iron ore|steel|pellets?)\s+production\s+(?:surges|rises|up)\s+(?P<pct>[\d.]+%)\s*yoy",
+            context,
+            re.IGNORECASE,
+        )
+        if match:
+            product = match.group("product").upper()
+            pct = match.group("pct")
+            base = f"{company}: {product} PRODUCTION UP {pct} YOY"
+            extra = self._guidance_extra_clause(context)
+            if extra:
+                base += f"; {extra}"
+            return base
+
+        match = re.match(
+            r"^(?P<name>.+?)\s+(?P<product>.+?)\s+production\s+surges\s+(?P<pct>[\d.]+%)\s+yoy$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            product = self._trim_company_words(match.group("product"), company)
+            pct = match.group("pct")
+            return f"{company}: {product} PRODUCTION UP {pct} YOY"
+
+        match = re.match(
+            r"^(?P<name>.+?)\s+reports\s+record\s+(?P<product>.+?)\s+production$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            product = self._trim_company_words(match.group("product"), company)
+            base = f"{company}: RECORD {product} PRODUCTION"
+            extra = self._guidance_extra_clause(context)
+            if extra:
+                base += f"; {extra}"
+            return base
+
+        if "production" in headline.lower() and ":" in headline:
+            return self._headline_as_wire(headline)
+        return None
+
+    def _penalty_wire_text(self, headline: str, context: str, company: str) -> str | None:
+        match = re.search(
+            r"gst\s+demand(?:\s+order)?(?:\s+(?:worth|of))?\s+(?P<value>(?:₹|rs\.?\s*)?[\d.,]+\s*crore)",
+            context,
+            re.IGNORECASE,
+        )
+        if match:
+            value = self._normalize_money(match.group("value"))
+            return f"{company}: GST DEMAND ORDER OF {value}"
+
+        match = re.match(
+            r"^(?P<name>.+?)\s+(?:receives|faces)\s+(?P<body>GST\s+demand(?:\s+order)?(?:\s+worth)?\s+.+)$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            body = match.group("body").upper()
+            body = re.sub(r"\bWORTH\b", "OF", body)
+            body = body.replace("₹", "RS ")
+            return f"{company}: {body}"
+        match = re.match(
+            r"^(?P<name>.+?)\s+faces\s+(?P<value>Rs\s*[\d.,]+\s*Crore)\s+GST\s+demand$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            value = self._normalize_money(match.group("value"))
+            return f"{company}: GST DEMAND OF {value}"
+        return None
+
+    def _order_wire_text(self, headline: str, context: str, company: str) -> str | None:
+        match = re.search(
+            r"(?:wins?|secured?|receives?)\s+(?P<value>₹?[\d.,]+\s*cr)\s+(?P<body>.+?)\s+(?:order|contract)",
+            context,
+            re.IGNORECASE,
+        )
+        if match:
+            value = self._normalize_money(match.group("value"))
+            body = match.group("body").upper().strip(" -,.")
+            return f"{company}: WINS {body} ORDER WORTH {value}"
+
+        project_match = re.search(
+            r"wins\s+(?P<value>₹?[\d.,]+\s*cr)\s+(?P<body>.+?)\s+project",
+            context,
+            re.IGNORECASE,
+        )
+        if project_match:
+            value = self._normalize_money(project_match.group("value"))
+            body = project_match.group("body").upper().strip(" -,.")
+            return f"{company}: WINS {body} PROJECT WORTH {value}"
+
+        match = re.match(
+            r"^(?P<name>.+?)\s+wins\s+(?P<value>₹?[\d.,]+\s*Cr)\s+(?P<body>.+?)\s+order$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            value = self._normalize_money(match.group("value"))
+            body = match.group("body").upper()
+            return f"{company}: WINS {body} ORDER WORTH {value}"
+
+        match = re.match(
+            r"^(?P<name>.+?)\s+wins\s+(?P<body>.+?)\s+contract$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            body = match.group("body").upper()
+            return f"{company}: WINS {body} CONTRACT"
+        return None
+
+    def _fundraise_wire_text(self, headline: str, context: str, company: str) -> str | None:
+        match = re.match(
+            r"^(?P<name>.+?)\s+rights issue opens (?P<date>.+)$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            return f"{company}: RIGHTS ISSUE OPENS {match.group('date').upper()}"
+        match = re.match(
+            r"^(?P<name>.+?)\s+sets record date for rights issue$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            return f"{company}: RECORD DATE SET FOR RIGHTS ISSUE"
+        match = re.match(
+            r"^(?P<name>.+?)\s+rights issue boosts (?P<body>.+)$",
+            headline,
+            re.IGNORECASE,
+        )
+        if match:
+            return f"{company}: RIGHTS ISSUE BOOSTS {match.group('body').upper()}"
+        return None
+
+    def _sales_extra_clause(self, context: str) -> str | None:
+        match = re.search(r"domestic sales(?:\s+(?:at|of))?\s*([\d,]+)\s+units?", context, re.IGNORECASE)
+        if match and "total sales" in context.lower():
+            return f"DOMESTIC SALES {match.group(1)} UNITS"
+        return None
+
+    def _guidance_extra_clause(self, context: str) -> str | None:
+        match = re.search(r"guidance(?:\s+of)?\s*([\d.,]+\s*(?:mt|mmt|ton|tons|units?))", context, re.IGNORECASE)
+        if match:
+            return f"VS GUIDANCE {match.group(1).upper()}"
+        return None
+
+    def _ebitda_extra_clause(self, context: str) -> str | None:
+        match = re.search(r"ebitda\s+(?:boost|up|rise|rises|surges)\s+(?:of\s+|at\s+)?(~?\s*₹?[\d.,]+\s*(?:crore|cr))", context, re.IGNORECASE)
+        if match:
+            return f"EBITDA {self._normalize_money(match.group(1))}"
+        return None
+
+    def _wire_context_text(self, facts: dict) -> str:
+        parts = [self._clean_headline(facts), str(facts.get("article_text") or "").strip()]
+        return " ".join(part for part in parts if part).strip()
+
+    def _omit_source_attribution(self, facts: dict) -> bool:
+        return str(facts.get("source_name") or "") == "tradient_market_news"
+
+    def _with_optional_source(self, text: str, facts: dict, source_override: str | None = None) -> str:
+        cleaned = text.strip().rstrip(".")
+        if self._omit_source_attribution(facts):
+            return cleaned
+        source_name = source_override or self._display_source_name(facts)
+        return f"{cleaned}. Source: {source_name}."
+
+    def _headline_as_wire(self, headline: str) -> str:
+        if ":" in headline:
+            left, right = headline.split(":", 1)
+            return f"{left.strip().upper()}: {right.strip().upper()}"
+        return headline.upper()
+
+    def _company_wire_label(self, facts: dict) -> str | None:
+        company = self._company_display(facts)
+        if not company:
+            return None
+        display_symbol = str(facts.get("display_symbol") or "").strip()
+        if display_symbol:
+            company = display_symbol
+        cleaned = re.sub(r"\s*&\s*INDUSTRIES\b", "", company, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"\b(LIMITED|LTD|LTD\.|INDUSTRIES|INDUSTRY|AND ENERGY|INFORMATION SECURITY L|INFORMATION SECURITY)\b",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\bAND\s+ISPAT\b", "& ISPAT", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -,.")
+        return cleaned.upper()
+
+    def _trim_company_words(self, fragment: str, company: str) -> str:
+        text = fragment.upper().strip()
+        company_words = [word for word in company.upper().split() if len(word) > 2]
+        while company_words and text.startswith(f"{company_words[-1]} "):
+            word = company_words.pop()
+            text = text[len(word) + 1 :].strip()
+        return text
+
+    def _normalize_money(self, value: str) -> str:
+        text = value.strip()
+        text = text.replace("₹", "RS ")
+        text = re.sub(r"(?i)\brs\b\.?", "RS", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text.upper()
+
+    def _should_preserve_company_wire_headline(self, headline: str) -> bool:
+        lowered = headline.lower()
+        return any(term in lowered for term in (
+            "sales",
+            "volume",
+            "turnover",
+            "production",
+            "ebitda",
+            "guidance",
+            "gst demand",
+            "tax demand",
+            "demand order",
+            "yoy",
+            "domestic sales",
+            "commercial production",
+        ))
 
     def _clean_headline(self, facts: dict) -> str:
         return str(facts.get("headline", "")).strip().rstrip(".")
