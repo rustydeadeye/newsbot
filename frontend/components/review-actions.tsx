@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 
 import { approveDraft, rejectDraft } from "@/lib/api";
-import { formatPublishTime, getRecommendedPublishPlan } from "@/lib/publish-plan";
+import { formatPublishTime, getRecommendedPublishPlan, toIsoString } from "@/lib/publish-plan";
 import { ViewerRole } from "@/lib/session";
 import { CreatorSettings } from "@/lib/types";
 
@@ -38,22 +38,23 @@ export function ReviewActions({
     startTransition(async () => {
       try {
         if (autoQueue && scheduleLater && scheduledFor) {
-          const selectedDate = new Date(scheduledFor);
-          if (Number.isNaN(selectedDate.getTime()) || selectedDate.getTime() <= Date.now()) {
+          const selectedDateIso = toIsoString(scheduledFor);
+          if (!selectedDateIso || new Date(selectedDateIso).getTime() <= Date.now()) {
             setMessage("Choose a future time for scheduled posting.");
             return;
           }
         }
+        const scheduledAt = autoQueue
+          ? scheduleLater && scheduledFor
+            ? toIsoString(scheduledFor)
+            : recommendedPlan?.mode === "scheduled"
+              ? recommendedPlan.scheduledFor
+              : null
+          : null;
         const result = await approveDraft(draftId, {
           edited_text: text,
           auto_queue: autoQueue,
-          scheduled_for: autoQueue
-            ? scheduleLater && scheduledFor
-              ? new Date(scheduledFor).toISOString()
-              : recommendedPlan?.mode === "scheduled"
-                ? recommendedPlan.scheduledFor
-                : null
-            : null,
+          scheduled_for: scheduledAt,
         });
         if (result.warning === "x_account_not_connected") {
           setMessage("Draft approved. Connect your X account in Settings when you are ready to schedule publishing.");
@@ -93,6 +94,7 @@ export function ReviewActions({
   const isOverLimit = charRemaining < 0;
   const charTone = isOverLimit ? "over" : charRemaining < 20 ? "danger" : charRemaining < 50 ? "warn" : "ok";
   const isResolved = lastAction !== null;
+  const minimumScheduleValue = new Date(Date.now() + 60_000).toISOString().slice(0, 16);
 
   if (isResolved) {
     return (
@@ -198,7 +200,7 @@ export function ReviewActions({
             className="editor"
             type="datetime-local"
             value={scheduledFor}
-            min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+            min={minimumScheduleValue}
             onChange={(event) => setScheduledFor(event.target.value)}
           />
         </label>

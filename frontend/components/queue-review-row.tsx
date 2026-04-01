@@ -1,12 +1,15 @@
 import type { Route } from "next";
 import Link from "next/link";
 
-import { getFreshnessLabel, getFreshnessTone } from "@/lib/lifecycle-ui";
+import { formatOptionalDateTime, getFreshnessLabel, getFreshnessTone } from "@/lib/lifecycle-ui";
+import { parseIsoDate } from "@/lib/publish-plan";
 import { ViewerRole } from "@/lib/session";
 import { ReviewItem } from "@/lib/types";
 
 function overdueLabel(slaDueAt: string): string {
-  const hoursAgo = Math.round((Date.now() - new Date(slaDueAt).getTime()) / 3_600_000);
+  const parsed = parseIsoDate(slaDueAt);
+  if (!parsed) return "overdue";
+  const hoursAgo = Math.round((Date.now() - parsed.getTime()) / 3_600_000);
   return hoursAgo > 0 ? `overdue · ${hoursAgo}h ago` : "overdue";
 }
 
@@ -30,6 +33,7 @@ function getTypeLabel(item: ReviewItem, role: ViewerRole) {
 export function QueueReviewRow({ item, href = "/drafts", role = "admin" }: { item: ReviewItem; href?: string; role?: ViewerRole }) {
   const freshnessLabel = role === "customer" ? getFreshnessLabel(item) : null;
   const freshnessTone = getFreshnessTone(item);
+  const overdueTitle = formatOptionalDateTime(item.sla_due_at);
   return (
     <Link href={href as Route} className="queue-review-row queue-review-row-link">
       <div className="row space">
@@ -39,7 +43,7 @@ export function QueueReviewRow({ item, href = "/drafts", role = "admin" }: { ite
             {getReasonLabel(item.reason, role)}
           </span>
           {item.overdue ? (
-            <span className="pill warn" title={item.sla_due_at ?? undefined}>
+            <span className="pill warn" title={overdueTitle ?? undefined}>
               {item.sla_due_at ? overdueLabel(item.sla_due_at) : "overdue"}
             </span>
           ) : null}

@@ -14,7 +14,7 @@ import { ReviewActions } from "@/components/review-actions";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getCurrentPipelineRun, getCustomerDraftsWorkspace } from "@/lib/api";
-import { getBucketLabel, getFreshnessLabel, getInactiveReasonCopy } from "@/lib/lifecycle-ui";
+import { formatOptionalDateTime, getBucketLabel, getFreshnessLabel, getInactiveReasonCopy, getSafeText } from "@/lib/lifecycle-ui";
 import { formatPublishTime } from "@/lib/publish-plan";
 import { DraftSummary } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
@@ -190,9 +190,9 @@ export default async function DraftsPage({
                 role={role}
               />
               <div className="draft-workbench-context">
-                <div className="lead-review-block">
-                  <div className="section-label">Source context</div>
-                  <div className="card-subtle">{String(draft.event?.summary_facts?.source_name ?? "Unknown source")}</div>
+                  <div className="lead-review-block">
+                    <div className="section-label">Source context</div>
+                    <div className="card-subtle">{getSafeText(draft.event?.summary_facts?.source_name, "Unknown source")}</div>
                   {draft.event?.summary_facts?.document_url || draft.event?.summary_facts?.source_url ? (
                     <a
                       className="source-link"
@@ -247,7 +247,7 @@ export default async function DraftsPage({
                     <span className="pill">approved</span>
                     <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
                   </div>
-                  <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                  <div className="queue-row-title">{getSafeText(draft.event?.summary_facts?.headline, draft.draft_text)}</div>
                   <div className="card-subtle">Approved and waiting for schedule. Choose when it should move forward.</div>
                   <div className="card-subtle">{draft.draft_text}</div>
                 </div>
@@ -265,7 +265,7 @@ export default async function DraftsPage({
                     </span>
                     <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
                   </div>
-                  <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                  <div className="queue-row-title">{getSafeText(draft.event?.summary_facts?.headline, draft.draft_text)}</div>
                   <div className="card-subtle">{draft.draft_text}</div>
                   <div className="card-subtle">
                     {draft.publish_job?.scheduled_for
@@ -296,7 +296,7 @@ export default async function DraftsPage({
                     <span className="pill danger">Needs attention</span>
                     <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
                   </div>
-                  <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                  <div className="queue-row-title">{getSafeText(draft.event?.summary_facts?.headline, draft.draft_text)}</div>
                   <div className="card-subtle">Publishing did not complete. Review the item and retry or move it back to approved.</div>
                   {draft.publish_job ? (
                     <CustomerPublishJobActions
@@ -320,7 +320,7 @@ export default async function DraftsPage({
                     <span className="pill subtle">posted</span>
                     <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
                   </div>
-                  <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                  <div className="queue-row-title">{getSafeText(draft.event?.summary_facts?.headline, draft.draft_text)}</div>
                   <div className="card-subtle">Posted successfully.</div>
                   <div className="card-subtle">{draft.draft_text}</div>
                 </div>
@@ -341,10 +341,10 @@ export default async function DraftsPage({
                 <div className="row space">
                   <span className="pill subtle">{(draft.lifecycle_state ?? draft.status).replaceAll("_", " ")}</span>
                   <span className="card-subtle">
-                    {draft.updated_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(draft.updated_at)) : ""}
+                    {formatOptionalDateTime(draft.updated_at, customerSettings?.timezone) ?? ""}
                   </span>
                 </div>
-                <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                <div className="queue-row-title">{getSafeText(draft.event?.summary_facts?.headline, draft.draft_text)}</div>
                 <div className="card-subtle">{getInactiveReasonCopy(draft.inactive_reason) ?? draft.draft_text}</div>
               </div>
             ))}

@@ -4,8 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { cancelPublishJob, reschedulePublishJob, retryPublishJob } from "@/lib/api";
-import { getNextAvailableSlot } from "@/lib/lifecycle-ui";
-import { formatPublishTime } from "@/lib/publish-plan";
+import { formatOptionalDateTime, getNextAvailableSlot } from "@/lib/lifecycle-ui";
+import { formatPublishTime, toIsoString } from "@/lib/publish-plan";
 import { CreatorSettings } from "@/lib/types";
 
 export function CustomerPublishJobActions({
@@ -26,6 +26,7 @@ export function CustomerPublishJobActions({
   const [message, setMessage] = useState<string | null>(null);
   const [customScheduledFor, setCustomScheduledFor] = useState("");
   const nextSlot = settings ? getNextAvailableSlot(settings) : null;
+  const minimumScheduleValue = new Date(Date.now() + 60_000).toISOString().slice(0, 16);
 
   function saveSchedule(value: string) {
     startTransition(async () => {
@@ -68,7 +69,12 @@ export function CustomerPublishJobActions({
       setMessage("Choose a future time first.");
       return;
     }
-    saveSchedule(new Date(customScheduledFor).toISOString());
+    const iso = toIsoString(customScheduledFor);
+    if (!iso) {
+      setMessage("Choose a valid future time first.");
+      return;
+    }
+    saveSchedule(iso);
   }
 
   return (
@@ -106,7 +112,7 @@ export function CustomerPublishJobActions({
               type="datetime-local"
               value={customScheduledFor}
               onChange={(event) => setCustomScheduledFor(event.target.value)}
-              min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+              min={minimumScheduleValue}
             />
             <button className="button secondary" disabled={isPending} onClick={onReschedule}>
               {isPending ? "Saving…" : "Reschedule"}
@@ -122,6 +128,9 @@ export function CustomerPublishJobActions({
       <div className="card-subtle">
         Custom schedules must be in the future and may still be limited by your posting window.
       </div>
+      {currentScheduledFor ? (
+        <div className="card-subtle">Current schedule: {formatOptionalDateTime(currentScheduledFor, settings?.timezone) ?? "Time unavailable"}</div>
+      ) : null}
       {message ? <div className="card-subtle">{message}</div> : null}
     </div>
   );

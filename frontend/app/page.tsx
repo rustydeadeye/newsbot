@@ -14,7 +14,7 @@ import { QueueReviewRow } from "@/components/queue-review-row";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getCurrentPipelineRun, getCustomerHomeWorkspace, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
-import { getActivityLabel, getInactiveReasonCopy } from "@/lib/lifecycle-ui";
+import { formatOptionalDateTime, getActivityLabel, getInactiveReasonCopy } from "@/lib/lifecycle-ui";
 import { formatPublishTime } from "@/lib/publish-plan";
 import { CustomerWorkspaceState, PipelineRun, ReviewItem } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
@@ -202,13 +202,7 @@ export default async function HomePage() {
   const sinceAttention = recentActivity.filter((item) => ["failed", "expired", "superseded"].includes(item.status));
   const sinceCompletedCount = Number((sinceLastSeenSummary as Record<string, number>).posted ?? 0);
   const briefingHasActivity = sinceAttention.length > 0 || sinceCompletedCount > 0;
-  const sinceAnchor = sinceLastSeenAt
-    ? new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-        timeZone: customerSettings?.timezone ?? "Asia/Kolkata",
-      }).format(new Date(sinceLastSeenAt))
-    : null;
+  const sinceAnchor = formatOptionalDateTime(sinceLastSeenAt, customerSettings?.timezone);
 
   return (
     <div className="page-grid">
@@ -342,7 +336,7 @@ export default async function HomePage() {
                           <div key={`${item.status}-${item.draft_id}`} className={`publish-row ${item.status === "failed" ? "failed" : ""}`}>
                             <div className="row space">
                               <span className="pill warn">{getActivityLabel(item.status)}</span>
-                              <span className="card-subtle">{item.updated_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.updated_at)) : ""}</span>
+                              <span className="card-subtle">{formatOptionalDateTime(item.updated_at, customerSettings?.timezone) ?? ""}</span>
                             </div>
                             <div className="queue-row-title">{item.headline}</div>
                             {item.inactive_reason ? <div className="card-subtle">{getInactiveReasonCopy(item.inactive_reason)}</div> : null}

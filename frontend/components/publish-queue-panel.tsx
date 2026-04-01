@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 
 import { cancelPublishJob, retryPublishJob } from "@/lib/api";
+import { formatOptionalDateTime, getSafeText, isFutureTime } from "@/lib/lifecycle-ui";
 import { PublishJob, PublishLog } from "@/lib/types";
 
 const SKIP_REASON_LABELS: Record<string, string> = {
@@ -13,11 +14,6 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   dry_run: "Dry run — not posted",
   cancelled_by_admin: "Cancelled by admin",
 };
-
-function formatScheduled(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
 
 export function PublishQueuePanel({
   jobs: initialJobs,
@@ -69,7 +65,7 @@ export function PublishQueuePanel({
         <div className="log-list">
           {jobs.length === 0 ? <div className="empty">No publish jobs yet.</div> : null}
           {jobs.map((job) => {
-            const isFuture = job.scheduled_for && new Date(job.scheduled_for) > new Date();
+            const isFuture = isFutureTime(job.scheduled_for);
             const displayMessage = job.result_message
               ? (SKIP_REASON_LABELS[job.result_message] ?? job.result_message)
               : job.last_error
@@ -93,11 +89,11 @@ export function PublishQueuePanel({
                   <span className="card-subtle">attempts {job.attempt_count}</span>
                 </div>
                 <div className="queue-row-title">
-                  {String(job.event?.summary_facts?.headline ?? job.draft?.draft_text ?? "Unknown delivery job")}
+                  {getSafeText(job.event?.summary_facts?.headline, job.draft?.draft_text ?? "Unknown delivery job")}
                 </div>
                 <div className="card-subtle">{displayMessage}</div>
                 {isFuture ? (
-                  <div className="card-subtle">Scheduled for {formatScheduled(job.scheduled_for!)}</div>
+                  <div className="card-subtle">Scheduled for {formatOptionalDateTime(job.scheduled_for) ?? "Time unavailable"}</div>
                 ) : null}
                 {actionErrors[job.id] ? <div className="card-subtle">{actionErrors[job.id]}</div> : null}
                 {job.status === "failed" || job.status === "skipped" ? (
@@ -131,7 +127,7 @@ export function PublishQueuePanel({
                   <span className="pill">posted</span>
                   <span className="mono">{log.platform_post_id ?? "no-platform-id"}</span>
                 </div>
-                <div className="card-subtle">Posted at {log.posted_at ?? log.created_at}</div>
+                <div className="card-subtle">Posted at {formatOptionalDateTime(log.posted_at ?? log.created_at) ?? "Time unavailable"}</div>
                 {hasEngagement ? (
                   <div className="card-subtle">
                     {typeof eng.like_count !== "undefined" ? `Likes: ${eng.like_count}` : null}

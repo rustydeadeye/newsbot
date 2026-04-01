@@ -1,12 +1,48 @@
 import { CreatorSettings, DraftSummary, ReviewItem } from "@/lib/types";
-import { formatPublishTime, getRecommendedPublishPlan } from "@/lib/publish-plan";
+import { formatPublishTime, getRecommendedPublishPlan, parseIsoDate } from "@/lib/publish-plan";
 
-function formatLocalTime(iso: string, timezone?: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: timezone || "Asia/Kolkata",
-  }).format(new Date(iso));
+function getSafeTimeZone(timezone?: string | null) {
+  const value = timezone || "Asia/Kolkata";
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: value }).format(new Date());
+    return value;
+  } catch {
+    return "Asia/Kolkata";
+  }
+}
+
+export function formatOptionalDateTime(iso?: string | null, timezone?: string | null) {
+  const parsed = parseIsoDate(iso);
+  if (!parsed) return null;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: getSafeTimeZone(timezone),
+    }).format(parsed);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "Asia/Kolkata",
+    }).format(parsed);
+  }
+}
+
+export function isFutureTime(iso?: string | null) {
+  const parsed = parseIsoDate(iso);
+  if (!parsed) return false;
+  return parsed.getTime() > Date.now();
+}
+
+export function getSafeText(value: unknown, fallback = "") {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return fallback;
 }
 
 export function getFreshnessLabel(item: Pick<ReviewItem | DraftSummary, "lifecycle_state" | "fresh_until">, timezone?: string) {
@@ -17,7 +53,9 @@ export function getFreshnessLabel(item: Pick<ReviewItem | DraftSummary, "lifecyc
     return "Still actionable, but aging out soon";
   }
   if (item.lifecycle_state === "fresh" && item.fresh_until) {
-    return `Fresh until ${formatLocalTime(item.fresh_until, timezone)}`;
+    const formatted = formatOptionalDateTime(item.fresh_until, timezone);
+    if (!formatted) return "Fresh for now";
+    return `Fresh until ${formatted}`;
   }
   return null;
 }

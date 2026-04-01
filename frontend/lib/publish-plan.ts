@@ -10,6 +10,27 @@ export type PublishPlan = {
   helper: string;
 };
 
+function getSafeTimeZone(timezone?: string | null) {
+  const value = timezone || "Asia/Kolkata";
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: value }).format(new Date());
+    return value;
+  } catch {
+    return "Asia/Kolkata";
+  }
+}
+
+export function parseIsoDate(value?: string | null) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function toIsoString(value?: string | null) {
+  const parsed = parseIsoDate(value);
+  return parsed ? parsed.toISOString() : null;
+}
+
 function inPostingWindow(settings: PublishSettings, now: Date) {
   const start = settings.posting_window_start;
   const end = settings.posting_window_end;
@@ -17,7 +38,7 @@ function inPostingWindow(settings: PublishSettings, now: Date) {
     return true;
   }
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: settings.timezone || "Asia/Kolkata",
+    timeZone: getSafeTimeZone(settings.timezone),
     hour: "numeric",
     hour12: false,
   });
@@ -33,7 +54,7 @@ function nextWindowOpen(settings: PublishSettings, now: Date) {
   if (start === null) {
     return now;
   }
-  const timezone = settings.timezone || "Asia/Kolkata";
+  const timezone = getSafeTimeZone(settings.timezone);
   const localParts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric",
@@ -51,16 +72,28 @@ function nextWindowOpen(settings: PublishSettings, now: Date) {
 }
 
 export function formatPublishTime(iso: string, timezone: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: timezone || "Asia/Kolkata",
-  }).format(new Date(iso));
+  const parsed = parseIsoDate(iso);
+  if (!parsed) {
+    return "Time unavailable";
+  }
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: getSafeTimeZone(timezone),
+    }).format(parsed);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "Asia/Kolkata",
+    }).format(parsed);
+  }
 }
 
 export function getRecommendedPublishPlan(settings: PublishSettings | null | undefined): PublishPlan | null {
   if (!settings) return null;
-  const timezone = settings.timezone || "Asia/Kolkata";
+  const timezone = getSafeTimeZone(settings.timezone);
   const now = new Date();
   if (inPostingWindow(settings, now)) {
     return {
