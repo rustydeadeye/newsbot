@@ -171,6 +171,8 @@ class DraftingService:
             return self._regulatory_template(facts)
         if event_type == "earnings":
             return self._earnings_template(facts)
+        if event_type == "fund_notice":
+            return self._fund_notice_template(facts)
         if event_type in {"dividend", "bonus_split"}:
             return self._corporate_action_template(facts)
         if event_type in {"fundraise", "order_win", "management_change", "acquisition", "default_fraud"}:
@@ -220,11 +222,22 @@ class DraftingService:
         company = self._company_display(facts)
         period = facts.get("period")
         if company and period:
-            return f"{company} reports {period} results in {self._display_source_name(facts)}."
+            return f"{company}: {period} results filed. Source: {self._display_source_name(facts)}."
         headline = self._clean_headline(facts)
         if headline:
             return f"{headline}. Source: {self._display_source_name(facts)}."
         return None
+
+    def _fund_notice_template(self, facts: dict) -> str | None:
+        headline = self._clean_headline(facts)
+        source_name = self._display_source_name(facts)
+        if not headline:
+            return None
+        cleaned = re.sub(r"(?i)\breinvestment of idcw\b", "IDCW reinvestment", headline)
+        cleaned = re.sub(r"(?i)\bpayout of idcw\b", "IDCW payout", cleaned)
+        cleaned = re.sub(r"(?i)\bof idcw\b", "IDCW", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return f"{cleaned}. Source: {source_name}."
 
     def _corporate_action_template(self, facts: dict) -> str | None:
         company = self._company_display(facts)
@@ -238,15 +251,15 @@ class DraftingService:
             if per_share:
                 amount = f"{per_share.get('currency')} {per_share.get('value')}"
                 if event_date:
-                    return f"{company}'s dividend of {amount} per share has an ex-date of {event_date}, according to {source_name}."
-                return f"{company} announces a dividend of {amount} per share, according to {source_name}."
+                    return f"{company}: dividend {amount}/share; ex-date {event_date}. Source: {source_name}."
+                return f"{company}: dividend {amount}/share announced. Source: {source_name}."
 
         if event_type == "bonus_split" and company:
             ratio = next((item for item in numbers if item.get("type") == "ratio"), None)
             if ratio and event_date:
-                return f"{company}'s bonus issue in a {ratio.get('value')} ratio has an ex-date of {event_date}, according to {source_name}."
+                return f"{company}: bonus issue ratio {ratio.get('value')}; ex-date {event_date}. Source: {source_name}."
             if ratio:
-                return f"{company} announces a bonus issue in a {ratio.get('value')} ratio, according to {source_name}."
+                return f"{company}: bonus issue ratio {ratio.get('value')}. Source: {source_name}."
 
         headline = self._clean_headline(facts)
         if headline:

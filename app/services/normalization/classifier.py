@@ -9,6 +9,18 @@ def classify_event_type(
 ) -> str:
     lowered = title.lower()
     section = (section or "").lower()
+    is_fund_notice = any(term in lowered for term in (
+        " idcw",
+        "income distribution cum capital withdrawal",
+        "payout of idcw",
+        "reinvestment of idcw",
+        "dividend payout option",
+        "quarterly payout",
+        "halfyearly payout",
+        "half-yearly payout",
+        "monthly payout",
+        "reinvestment option",
+    ))
 
     if "monetary policy" in lowered or "repo rate" in lowered or "mpc" in lowered:
         return "rbi_policy"
@@ -41,6 +53,8 @@ def classify_event_type(
         if sebi_doc_type == "sebi_press_release":
             return "sebi_circular"  # treat SEBI press releases as policy circulars
         return "sebi_circular"  # default for SEBI items not otherwise classifiable
+    if is_fund_notice:
+        return "fund_notice"
     if any(term in lowered for term in ("quarter ended", "year ended", "q1", "q2", "q3", "q4", "fy", "financial results", "results for")):
         return "earnings"
     if section == "financial_results" or "results" in lowered or "financial results" in lowered:

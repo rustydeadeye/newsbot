@@ -102,6 +102,7 @@ def _extract_filing_type(item: SourceItem, event_type: str, section: str | None)
         return raw
     mapping = {
         "earnings": "financial_results",
+        "fund_notice": "fund_notice",
         "dividend": "corporate_action",
         "bonus_split": "corporate_action",
         "fundraise": "corporate_announcement",
@@ -114,7 +115,7 @@ def _extract_filing_type(item: SourceItem, event_type: str, section: str | None)
 def _subject_key(source: Source, item: SourceItem, event_type: str, section: str | None) -> str:
     if source.name == "rbi_press_releases" and event_type == "macro_release":
         return _macro_subject_key(item.title)
-    if source.name == "bse_announcements" and event_type in {"bonus_split", "dividend"}:
+    if source.name == "bse_announcements" and event_type in {"bonus_split", "dividend", "fund_notice"}:
         return _corporate_action_subject_key(source, item, event_type)
     if section == "corporate_actions":
         return _corporate_action_subject_key(source, item, event_type)
@@ -179,7 +180,7 @@ def _is_stale_event(source_name: str, event_type: str, raw_payload: dict, publis
 
     if source_name in {"nse_corporate_filings", "bse_announcements"} and event_type == "earnings":
         return age_days > 30
-    if source_name in {"nse_corporate_filings", "bse_announcements"} and event_type == "general_update":
+    if source_name in {"nse_corporate_filings", "bse_announcements"} and event_type in {"general_update", "fund_notice"}:
         return age_days > 14
     return False
 

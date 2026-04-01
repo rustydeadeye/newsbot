@@ -121,7 +121,7 @@ _CUSTOMER_FALLBACK_EVENT_TYPES = {
     "bonus_split",
     "order_win",
 }
-_CUSTOMER_WATCHLIST_EVENT_TYPES = _CUSTOMER_FALLBACK_EVENT_TYPES | {"management_change"}
+_CUSTOMER_WATCHLIST_EVENT_TYPES = _CUSTOMER_FALLBACK_EVENT_TYPES | {"management_change", "fund_notice"}
 _CUSTOMER_AUTO_POST_ALLOWLIST = {
     "rbi_policy",
     "rbi_penalty",
@@ -307,7 +307,7 @@ def _event_text_blob(event: Event) -> str:
 
 
 def _is_low_signal_fund_notice(event: Event) -> bool:
-    if event.event_type != "dividend":
+    if event.event_type not in {"dividend", "fund_notice"}:
         return False
     text = _event_text_blob(event)
     return any(
@@ -365,6 +365,9 @@ def _customer_family_limit(event: Event) -> int:
 def _customer_draft_skip_reason(event: Event, watchlist_match: bool) -> str | None:
     if event.event_type == "general_update":
         return "filtered_event_type"
+
+    if event.event_type == "fund_notice" and not watchlist_match:
+        return "low_signal_fund_notice"
 
     if _is_low_signal_fund_notice(event) and not watchlist_match:
         return "low_signal_fund_notice"

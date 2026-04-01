@@ -32,6 +32,13 @@ def test_classify_quarter_style_title_as_earnings() -> None:
     assert classify_event_type("KPIT Technologies Ltd Q4/FY update", "bse_announcements") == "earnings"
 
 
+def test_classify_idcw_notice_as_fund_notice() -> None:
+    assert classify_event_type(
+        "UTI Banking and PSU Fund Direct Plan Halfyearly Payout of IDCW (9002324)",
+        "bse_announcements",
+    ) == "fund_notice"
+
+
 def test_customer_generation_filters_general_update() -> None:
     event = SimpleNamespace(
         event_type="general_update",
@@ -63,7 +70,7 @@ def test_customer_generation_allows_watchlist_match_with_material_fact() -> None
 
 def test_customer_generation_skips_low_signal_fund_dividend_without_watchlist_match() -> None:
     event = SimpleNamespace(
-        event_type="dividend",
+        event_type="fund_notice",
         importance_score=78,
         entity_name="ICICI Prudential Fixed Maturity Plan Series 84 - 1288 Days Plan E",
         ticker=None,

@@ -66,4 +66,18 @@ def test_bonus_template_uses_ratio_and_date() -> None:
             "attribution_required": True,
         }
     )
-    assert text == "IRB's bonus issue in a 1:1 ratio has an ex-date of March 30, 2026, according to an NSE filing."
+    assert text == "IRB: bonus issue ratio 1:1; ex-date March 30, 2026. Source: an NSE filing."
+
+
+def test_fund_notice_template_stays_factual() -> None:
+    service = DraftingService()
+    text = service._fallback_text(
+        {
+            "source_name": "bse_announcements",
+            "event_class": "fund_notice",
+            "headline": "UTI Banking and PSU Fund Direct Plan Halfyearly Reinvestment of IDCW (9002325)",
+            "attribution_required": True,
+        }
+    )
+    assert "benefit from compounded returns" not in text
+    assert text == "UTI Banking and PSU Fund Direct Plan Halfyearly IDCW reinvestment (9002325). Source: a BSE filing."

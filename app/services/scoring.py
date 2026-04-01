@@ -28,6 +28,7 @@ EVENT_BASE = {
     "sebi_circular": 85,
     "sebi_enforcement": 85,
     "earnings": 70,
+    "fund_notice": 48,
     "dividend": 65,
     "bonus_split": 70,
     "fundraise": 68,
@@ -67,7 +68,7 @@ def freshness_bonus(
     delta_days = (latest_date - reference).days
     abs_delta = abs(delta_days)
 
-    if event_type in {"dividend", "bonus_split", "fundraise", "order_win", "management_change"}:
+    if event_type in {"dividend", "bonus_split", "fundraise", "order_win", "management_change", "fund_notice"}:
         if abs_delta <= 3:
             return 10
         if abs_delta <= 10:
