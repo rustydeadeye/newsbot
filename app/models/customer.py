@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -19,6 +19,15 @@ class CustomerProfile(Base, TimestampMixin):
     watchlist: Mapped[list[str]] = mapped_column(JSON_VARIANT, default=list)
     blocked_phrases: Mapped[list[str]] = mapped_column(JSON_VARIANT, default=list)
     token_store: Mapped[dict] = mapped_column(JSON_VARIANT, default=dict)
+    automation_mode: Mapped[str] = mapped_column(String(60), default="auto_generate_manual_review")
+    freshness_window_hours: Mapped[int] = mapped_column(Integer, default=12)
+    max_posts_per_hour: Mapped[int] = mapped_column(Integer, default=6)
+    timezone: Mapped[str] = mapped_column(String(50), default="Asia/Kolkata")
+    posting_window_start: Mapped[int | None] = mapped_column(Integer)
+    posting_window_end: Mapped[int | None] = mapped_column(Integer)
+    auto_post_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_post_threshold: Mapped[int] = mapped_column(Integer, default=85)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def to_dict(self) -> dict:
@@ -31,14 +40,19 @@ class CustomerProfile(Base, TimestampMixin):
             "primary_platform": "x",
             "tone": self.tone,
             "language": self.language,
-            "max_posts_per_hour": 6,
+            "automation_mode": self.automation_mode,
+            "freshness_window_hours": self.freshness_window_hours,
+            "max_posts_per_hour": self.max_posts_per_hour,
             "watchlist": self.watchlist,
             "blocked_phrases": self.blocked_phrases,
-            "timezone": "Asia/Kolkata",
-            "posting_window_start": None,
-            "posting_window_end": None,
+            "timezone": self.timezone,
+            "posting_window_start": self.posting_window_start,
+            "posting_window_end": self.posting_window_end,
             "openai_configured": bool(store.get("openai_api_key")),
             "x_connected": bool(store.get("x_access_token")),
+            "auto_post_enabled": self.auto_post_enabled,
+            "auto_post_threshold": self.auto_post_threshold,
+            "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "onboarding_completed": self.onboarding_completed_at is not None,
             "onboarding_completed_at": self.onboarding_completed_at.isoformat() if self.onboarding_completed_at else None,
             "publishing_ready": bool(store.get("x_access_token")),

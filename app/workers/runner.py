@@ -7,6 +7,7 @@ from app.pipeline import (
     normalize_pending_items,
     publish_ready_jobs,
     queue_publish_jobs,
+    run_background_customer_generation,
 )
 from app.repositories.pipeline_runs import PipelineRunRepository
 from app.services.ingestion.service import IngestionService
@@ -22,12 +23,14 @@ def run_cycle() -> dict[str, int | dict[str, int]]:
         drafted = draft_pending_events(db, settings.auto_post_threshold)
         queued = queue_publish_jobs(db)
         posted = publish_ready_jobs(db)
+        customer_generation = run_background_customer_generation(db, settings.auto_post_threshold)
         return {
             "ingested": ingest_counts,
             "normalized": normalized,
             "drafted": drafted,
             "queued": queued,
             "posted": posted,
+            "customer_generation": customer_generation,
         }
 
 

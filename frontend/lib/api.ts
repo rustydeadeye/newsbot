@@ -139,6 +139,13 @@ export function retryPublishJob(jobId: number) {
   });
 }
 
+export function reschedulePublishJob(jobId: number, scheduledFor: string) {
+  return fetchJson<PublishJob>(`/publish-jobs/${jobId}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ scheduled_for: scheduledFor })
+  });
+}
+
 export function cancelPublishJob(jobId: number) {
   return fetchJson<PublishJob>(`/publish-jobs/${jobId}/cancel`, {
     method: "POST"

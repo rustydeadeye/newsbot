@@ -8,13 +8,14 @@ from app.api.security import ViewerContext, get_current_viewer
 from app.db.session import get_db
 from app.models.job import PublishJob
 from app.models.review import ReviewQueueItem
-from app.pipeline import enqueue_approved_draft, publish_job_now
+from app.pipeline import enqueue_approved_draft, enqueue_customer_approved_draft, publish_job_now
 from app.repositories.creators import CreatorSettingsRepository
 from app.repositories.customers import CustomerProfileRepository
 from app.repositories.drafts import DraftRepository
 from app.repositories.events import EventRepository
 from app.repositories.jobs import PublishJobRepository
 from app.repositories.review import ReviewQueueRepository
+from app.services.customer_lifecycle import apply_customer_lifecycle, lifecycle_metadata, summarize_recent_activity
 
 router = APIRouter()
 
@@ -33,11 +34,15 @@ def _viewer_draft(draft_repo: DraftRepository, event_id: int, viewer: ViewerCont
     return draft_repo.latest_for_event(event_id, viewer.workspace_user_id if viewer.is_customer else None)
 
 
-def _serialize_draft(draft, job_repo: PublishJobRepository | None = None) -> dict:
+def _serialize_draft(draft, event, profile, job_repo: PublishJobRepository | None = None, review_item: ReviewQueueItem | None = None) -> dict:
     payload = draft.to_dict()
+    payload["updated_at"] = draft.updated_at.isoformat() if draft.updated_at else None
     if job_repo is not None:
         publish_job = job_repo.latest_for_draft(draft.id)
         payload["publish_job"] = publish_job.to_dict() if publish_job else None
+    else:
+        publish_job = None
+    payload.update(lifecycle_metadata(draft, event, profile, publish_job, review_item))
     return payload
 
 
@@ -45,18 +50,30 @@ def _review_queue_payload(db: Session, viewer: ViewerContext) -> list[dict]:
     review_repo = ReviewQueueRepository(db)
     event_repo = EventRepository(db)
     draft_repo = DraftRepository(db)
+    profile = None
+    if viewer.is_customer:
+        profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
+        apply_customer_lifecycle(db, profile)
     items = review_repo.list_open_for_workspace_user(viewer.workspace_user_id) if viewer.is_customer else review_repo.list_open()
     payload: list[dict] = []
     for item in items:
         event = event_repo.get(item.event_id)
         draft = _viewer_draft(draft_repo, item.event_id, viewer)
-        payload.append({**item.to_dict(), "event": _serialize_event(event, viewer), "draft": draft.to_dict() if draft else None})
+        payload.append({
+            **item.to_dict(),
+            "event": _serialize_event(event, viewer),
+            "draft": _serialize_draft(draft, event, profile, review_item=item) if draft and profile else draft.to_dict() if draft else None,
+        })
     return payload
 
 
 def _review_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
     draft_repo = DraftRepository(db)
     event_repo = EventRepository(db)
+    profile = None
+    if viewer.is_customer:
+        profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
+        apply_customer_lifecycle(db, profile)
     drafts = (
         draft_repo.list_needing_review_for_workspace_user(viewer.workspace_user_id)
         if viewer.is_customer
@@ -65,7 +82,7 @@ def _review_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
     payload = []
     for draft in drafts:
         event = event_repo.get(draft.event_id)
-        payload.append({**draft.to_dict(), "event": _serialize_event(event, viewer)})
+        payload.append({**(_serialize_draft(draft, event, profile) if profile else draft.to_dict()), "event": _serialize_event(event, viewer)})
     return payload
 
 
@@ -73,6 +90,10 @@ def _approved_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
     draft_repo = DraftRepository(db)
     event_repo = EventRepository(db)
     job_repo = PublishJobRepository(db)
+    profile = None
+    if viewer.is_customer:
+        profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
+        apply_customer_lifecycle(db, profile)
     drafts = (
         draft_repo.list_customer_post_approval_for_workspace_user(viewer.workspace_user_id)
         if viewer.is_customer
@@ -81,13 +102,16 @@ def _approved_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
     payload = []
     for draft in drafts:
         event = event_repo.get(draft.event_id)
-        payload.append({**_serialize_draft(draft, job_repo), "event": _serialize_event(event, viewer)})
+        payload.append({**_serialize_draft(draft, event, profile, job_repo), "event": _serialize_event(event, viewer)})
     return payload
 
 
 def _rejected_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
     draft_repo = DraftRepository(db)
     event_repo = EventRepository(db)
+    profile = None
+    if viewer.is_customer:
+        profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
     drafts = (
         draft_repo.list_rejected_for_workspace_user(viewer.workspace_user_id)
         if viewer.is_customer
@@ -96,7 +120,19 @@ def _rejected_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
     payload = []
     for draft in drafts:
         event = event_repo.get(draft.event_id)
-        payload.append({**draft.to_dict(), "event": _serialize_event(event, viewer)})
+        payload.append({**(_serialize_draft(draft, event, profile) if profile else draft.to_dict()), "event": _serialize_event(event, viewer)})
+    return payload
+
+
+def _history_drafts_payload(db: Session, viewer: ViewerContext) -> list[dict]:
+    draft_repo = DraftRepository(db)
+    event_repo = EventRepository(db)
+    profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
+    drafts = draft_repo.list_history_for_workspace_user(viewer.workspace_user_id)
+    payload = []
+    for draft in drafts:
+        event = event_repo.get(draft.event_id)
+        payload.append({**_serialize_draft(draft, event, profile), "event": _serialize_event(event, viewer)})
     return payload
 
 
@@ -151,6 +187,7 @@ def approve_draft(
     draft_repo = DraftRepository(db)
     review_repo = ReviewQueueRepository(db)
     job_repo = PublishJobRepository(db)
+    event_repo = EventRepository(db)
     draft = draft_repo.get(draft_id)
     if draft is None or (viewer.is_customer and draft.workspace_user_id != viewer.workspace_user_id):
         raise HTTPException(status_code=404, detail="Draft not found")
@@ -187,17 +224,30 @@ def approve_draft(
         elif job_repo.exists_for_draft(draft.id):
             queued = True
             publish_job = job_repo.latest_for_draft(draft.id)
-        else:
+        elif action.scheduled_for:
             publish_job = job_repo.add(PublishJob(draft_post_id=draft.id, scheduled_for=action.scheduled_for))
             draft.status = "queued"
             queued = True
+        else:
+            queued = enqueue_customer_approved_draft(db, draft.id, profile)
+            publish_job = job_repo.latest_for_draft(draft.id)
 
     db.commit()
     if viewer.is_customer and queued and publish_job and publish_job.scheduled_for is None:
         publish_job_now(db, publish_job.id)
         draft = draft_repo.get(draft_id) or draft
         publish_job = job_repo.latest_for_draft(draft.id)
-    result = {"draft": _serialize_draft(draft, job_repo), "queued": queued}
+    event = event_repo.get(draft.event_id)
+    profile = None
+    if viewer.is_customer:
+        profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(
+            viewer.workspace_user_id,
+            default_display_name=viewer.display_name,
+        )
+    result = {
+        "draft": _serialize_draft(draft, event, profile, job_repo) if profile else draft.to_dict(),
+        "queued": queued,
+    }
     if publish_job:
         result["publish_job"] = publish_job.to_dict()
     if warning:
@@ -253,10 +303,22 @@ def get_customer_home_workspace(
         viewer.workspace_user_id,
         default_display_name=viewer.display_name,
     )
+    apply_customer_lifecycle(db, settings)
+    queue = _review_queue_payload(db, viewer)
+    approved_drafts = _approved_drafts_payload(db, viewer)
+    rejected_drafts = _rejected_drafts_payload(db, viewer)
+    recent_activity_source = approved_drafts + _history_drafts_payload(db, viewer)
+    previous_last_seen_at = settings.last_seen_at.isoformat() if settings.last_seen_at else None
+    since_last_seen_summary, recent_activity = summarize_recent_activity(recent_activity_source, settings.last_seen_at)
+    settings.last_seen_at = datetime.now(timezone.utc)
+    db.commit()
     return {
-        "queue": _review_queue_payload(db, viewer),
-        "approved_drafts": _approved_drafts_payload(db, viewer),
+        "queue": queue,
+        "approved_drafts": approved_drafts,
         "settings": settings.to_dict(),
+        "since_last_seen_at": previous_last_seen_at,
+        "since_last_seen_summary": since_last_seen_summary,
+        "recent_activity": recent_activity,
     }
 
 
@@ -271,10 +333,16 @@ def get_customer_drafts_workspace(
         viewer.workspace_user_id,
         default_display_name=viewer.display_name,
     )
+    apply_customer_lifecycle(db, settings)
+    drafts = _review_drafts_payload(db, viewer)
+    approved_drafts = _approved_drafts_payload(db, viewer)
+    rejected_drafts = _rejected_drafts_payload(db, viewer)
+    history = _history_drafts_payload(db, viewer)[:12]
     return {
-        "drafts": _review_drafts_payload(db, viewer),
-        "approved_drafts": _approved_drafts_payload(db, viewer),
-        "rejected_drafts": _rejected_drafts_payload(db, viewer),
+        "drafts": drafts,
+        "approved_drafts": approved_drafts,
+        "rejected_drafts": rejected_drafts,
+        "history": history,
         "settings": settings.to_dict(),
     }
 

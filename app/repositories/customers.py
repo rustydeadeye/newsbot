@@ -36,3 +36,15 @@ class CustomerProfileRepository:
         profile.onboarding_completed_at = datetime.now(timezone.utc)
         self.db.flush()
         return profile
+
+    def mark_last_seen(self, profile: CustomerProfile) -> CustomerProfile:
+        profile.last_seen_at = datetime.now(timezone.utc)
+        self.db.flush()
+        return profile
+
+    def list_eligible_for_background_generation(self) -> list[CustomerProfile]:
+        stmt = select(CustomerProfile).where(
+            CustomerProfile.onboarding_completed_at.is_not(None),
+            CustomerProfile.automation_mode != "manual_review_only",
+        )
+        return list(self.db.scalars(stmt))

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.schemas import PublishJobRetryAction
+from app.api.schemas import PublishJobRetryAction, PublishJobScheduleAction
 from app.api.security import ViewerContext, get_current_viewer
 from app.db.session import get_db
 from app.repositories.drafts import DraftRepository
@@ -60,8 +60,12 @@ def cancel_publish_job(
     if job.status not in ("queued", "skipped"):
         raise HTTPException(status_code=409, detail="Only queued or skipped jobs can be cancelled")
 
+    draft = DraftRepository(db).get(job.draft_post_id)
     job.status = "cancelled"
-    job.result_message = "cancelled_by_admin"
+    job.result_message = "cancelled_by_customer" if viewer.is_customer else "cancelled_by_admin"
+    if draft is not None and viewer.is_customer:
+        draft.status = "approved"
+        draft.needs_review = False
     db.commit()
     return job.to_dict()
 
@@ -85,5 +89,29 @@ def retry_publish_job(
     job.last_error = None
     if action.scheduled_for:
         job.scheduled_for = action.scheduled_for
+    db.commit()
+    return job.to_dict()
+
+
+@router.post("/{job_id}/schedule")
+def reschedule_publish_job(
+    job_id: int,
+    action: PublishJobScheduleAction,
+    db: Session = Depends(get_db),
+    viewer: ViewerContext = Depends(get_current_viewer),
+) -> dict:
+    job_repo = PublishJobRepository(db)
+    job = job_repo.get_for_workspace_user(job_id, viewer.workspace_user_id) if viewer.is_customer else job_repo.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Publish job not found")
+    if job.status not in ("queued", "failed", "skipped", "cancelled"):
+        raise HTTPException(status_code=409, detail="This publish job cannot be rescheduled")
+    job.status = "queued"
+    job.scheduled_for = action.scheduled_for
+    job.last_error = None
+    draft = DraftRepository(db).get(job.draft_post_id)
+    if draft is not None:
+        draft.status = "queued"
+        draft.needs_review = False
     db.commit()
     return job.to_dict()

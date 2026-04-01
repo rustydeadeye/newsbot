@@ -14,6 +14,7 @@ import { QueueReviewRow } from "@/components/queue-review-row";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getCurrentPipelineRun, getCustomerHomeWorkspace, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
+import { getActivityLabel, getInactiveReasonCopy } from "@/lib/lifecycle-ui";
 import { formatPublishTime } from "@/lib/publish-plan";
 import { CustomerWorkspaceState, PipelineRun, ReviewItem } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
@@ -156,6 +157,9 @@ export default async function HomePage() {
   let currentRun = null;
   let customerSettings = null;
   let approvedDrafts = [];
+  let sinceLastSeenAt: string | null = null;
+  let sinceLastSeenSummary = {};
+  let recentActivity = [];
   try {
     const [workspace, run] = await Promise.all([
       getCustomerHomeWorkspace(accessToken),
@@ -164,6 +168,9 @@ export default async function HomePage() {
     queue = workspace.queue;
     approvedDrafts = workspace.approved_drafts;
     customerSettings = workspace.settings;
+    sinceLastSeenAt = workspace.since_last_seen_at ?? null;
+    sinceLastSeenSummary = workspace.since_last_seen_summary;
+    recentActivity = workspace.recent_activity;
     currentRun = run;
   } catch (error) {
     return (
@@ -186,14 +193,22 @@ export default async function HomePage() {
   const runIsActive = currentRun?.status === "queued" || currentRun?.status === "running";
   const leadItem = queue[0] ?? null;
   const secondaryItems = queue.slice(1, 6);
-  const highPriority = queue.filter((item: ReviewItem) => (item.event?.importance_score ?? 0) >= 80).length;
-  const ready = queue.filter((item: ReviewItem) => Boolean(item.draft?.draft_text)).length;
-  const showCustomerMetrics = state === "generation_ready";
+  const readyToPublishCount = approvedDrafts.filter((draft) => draft.status === "approved").length;
   const nextScheduledDraft = approvedDrafts.find((draft) => draft.publish_job?.scheduled_for);
   const postedCount = approvedDrafts.filter((draft) => draft.status === "posted").length;
   const queuedCount = approvedDrafts.filter((draft) => draft.status === "queued").length;
   const publishingCount = approvedDrafts.filter((draft) => draft.status === "publishing").length;
   const failedCount = approvedDrafts.filter((draft) => draft.status === "failed").length;
+  const sinceAttention = recentActivity.filter((item) => ["failed", "expired", "superseded"].includes(item.status));
+  const sinceCompletedCount = Number((sinceLastSeenSummary as Record<string, number>).posted ?? 0);
+  const briefingHasActivity = sinceAttention.length > 0 || sinceCompletedCount > 0;
+  const sinceAnchor = sinceLastSeenAt
+    ? new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: customerSettings?.timezone ?? "Asia/Kolkata",
+      }).format(new Date(sinceLastSeenAt))
+    : null;
 
   return (
     <div className="page-grid">
@@ -204,13 +219,6 @@ export default async function HomePage() {
         viewer={viewer}
         freshnessLabel="Decision-first workspace"
       />
-      {showCustomerMetrics ? (
-        <div className="metrics metrics-compact">
-          <KpiCard label="Needs Review" value={queue.length} detail="Items waiting for your decision" />
-          <KpiCard label="High Priority" value={highPriority} detail="Strong importance signals" tone={highPriority > 0 ? "warning" : "calm"} />
-          <KpiCard label="Drafts Ready" value={ready} detail="Items with usable draft text" />
-        </div>
-      ) : null}
       {state === "generation_in_progress" ? (
         <StatusPanel
           eyebrow="Generation status"
@@ -233,11 +241,25 @@ export default async function HomePage() {
         />
       ) : null}
       {state === "ready_to_generate" ? (
-        <EmptyState
-          title="Generate your first drafts"
-          description="Newsbot is ready to create draft posts from the latest updates in your coverage. Once they are ready, you will review them here before anything can move ahead."
-          action={<GenerateDraftsButton />}
-        />
+        approvedDrafts.length > 0 ? (
+          <StatusPanel
+            eyebrow="What needs your attention now"
+            title={nextScheduledDraft?.publish_job?.scheduled_for ? "Nothing needs review right now" : "No review items are waiting right now"}
+            description={
+              nextScheduledDraft?.publish_job?.scheduled_for
+                ? `Your next scheduled post is set for ${formatPublishTime(nextScheduledDraft.publish_job.scheduled_for, customerSettings?.timezone ?? "Asia/Kolkata")}. Open Drafts if you want to change the schedule or review approved items.`
+                : readyToPublishCount > 0
+                  ? `${readyToPublishCount} approved draft${readyToPublishCount === 1 ? "" : "s"} ${readyToPublishCount === 1 ? "is" : "are"} ready for a publishing decision in Drafts.`
+                  : "Nothing needs review right now. Newsbot will keep this workspace current as stronger updates arrive."
+            }
+          />
+        ) : (
+          <EmptyState
+            title="Generate your first drafts"
+            description="Newsbot is ready to create draft posts from the latest updates in your coverage. Once they are ready, you will review them here before anything can move ahead."
+            action={<GenerateDraftsButton />}
+          />
+        )
       ) : null}
       {state === "generation_no_matches" ? (
         <EmptyState
@@ -257,68 +279,81 @@ export default async function HomePage() {
                 publishSettings={customerSettings}
               />
             ) : null}
+            {secondaryItems.length > 0 ? (
+              <div className="panel">
+                <div className="section-title">Up next</div>
+                <div className="queue-list">
+                  {secondaryItems.map((item) => (
+                    <QueueReviewRow key={item.id} item={item} href={`/drafts?draftId=${item.draft?.id ?? item.id}`} role="customer" />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
-          <GuidePanel
-            eyebrow="How this works"
-            title="One lead decision at a time"
-            description="Newsbot finds recent updates, drafts the post, and sends anything uncertain or sensitive here for your approval. Nothing is treated as ready until you review it."
-          >
-            <div className="workspace-list">
-              <div className="workspace-list-row">
-                <span>Approve</span>
-                <strong>when the wording is ready to move forward</strong>
+          <div className="stack">
+            <GuidePanel
+              eyebrow="Publishing summary"
+              title="What can move forward next"
+              description="Home stays focused on action now. Use this summary to see what is ready, scheduled, or needs attention."
+            >
+              <div className="workspace-list">
+                <div className="workspace-list-row">
+                  <span>Ready to publish</span>
+                  <strong>{readyToPublishCount}</strong>
+                </div>
+                <div className="workspace-list-row">
+                  <span>Scheduled</span>
+                  <strong>{queuedCount + publishingCount}</strong>
+                </div>
+                <div className="workspace-list-row">
+                  <span>Needs attention</span>
+                  <strong>{failedCount}</strong>
+                </div>
               </div>
-              <div className="workspace-list-row">
-                <span>Reject</span>
-                <strong>when the draft needs a rewrite or should be held</strong>
+            </GuidePanel>
+            {nextScheduledDraft?.publish_job?.scheduled_for ? (
+              <StatusPanel
+                eyebrow="Scheduled next"
+                title={formatPublishTime(nextScheduledDraft.publish_job.scheduled_for, customerSettings?.timezone ?? "Asia/Kolkata")}
+                description="This is the next approved item currently set to move through publishing."
+              />
+            ) : null}
+            {(Object.keys(sinceLastSeenSummary).length > 0 || recentActivity.length > 0 || sinceAnchor) ? (
+              <div className="panel">
+                <div className="section-title">Since you were away</div>
+                {sinceAnchor ? <div className="card-subtle">Since {sinceAnchor}</div> : null}
+                {!briefingHasActivity ? (
+                  <div className="card-subtle" style={{ marginTop: "0.75rem" }}>Nothing important changed while you were away.</div>
+                ) : (
+                  <div className="stack" style={{ marginTop: "0.75rem" }}>
+                    <div className="workspace-list">
+                      <div className="workspace-list-row">
+                        <span>Posted</span>
+                        <strong>{sinceCompletedCount}</strong>
+                      </div>
+                      <div className="workspace-list-row">
+                        <span>Needs attention</span>
+                        <strong>{sinceAttention.length}</strong>
+                      </div>
+                    </div>
+                    {sinceAttention.length > 0 ? (
+                      <div className="stack">
+                        {sinceAttention.slice(0, 3).map((item) => (
+                          <div key={`${item.status}-${item.draft_id}`} className={`publish-row ${item.status === "failed" ? "failed" : ""}`}>
+                            <div className="row space">
+                              <span className="pill warn">{getActivityLabel(item.status)}</span>
+                              <span className="card-subtle">{item.updated_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.updated_at)) : ""}</span>
+                            </div>
+                            <div className="queue-row-title">{item.headline}</div>
+                            {item.inactive_reason ? <div className="card-subtle">{getInactiveReasonCopy(item.inactive_reason)}</div> : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
-              <div className="workspace-list-row">
-                <span>Events</span>
-                <strong>gives you story context, not required work</strong>
-              </div>
-            </div>
-          </GuidePanel>
-        </div>
-      ) : null}
-      {state === "generation_ready" && approvedDrafts.length > 0 ? (
-        <StatusPanel
-          eyebrow="Publishing activity"
-          title={
-            failedCount > 0
-              ? "Some approved drafts need attention"
-              : publishingCount > 0
-                ? "A draft is publishing right now"
-                : nextScheduledDraft?.publish_job?.scheduled_for
-              ? `Next post: ${formatPublishTime(nextScheduledDraft.publish_job.scheduled_for, customerSettings?.timezone ?? "Asia/Kolkata")}`
-              : queuedCount > 0
-                ? "Approved drafts are queued for publishing"
-                : postedCount > 0
-                  ? "Your recent approved drafts have already posted"
-                  : "Approved drafts are waiting for your next publishing step"
-          }
-          description={
-            failedCount > 0
-              ? `${failedCount} approved draft${failedCount === 1 ? "" : "s"} hit a delivery issue. Open Drafts to review what needs to be retried or adjusted.`
-              : publishingCount > 0
-                ? `${publishingCount} draft${publishingCount === 1 ? "" : "s"} ${publishingCount === 1 ? "is" : "are"} actively moving through publishing right now.`
-              : nextScheduledDraft?.publish_job?.scheduled_for
-              ? `Newsbot will send your next approved draft at the scheduled time. You can review the full list in Drafts.`
-              : queuedCount > 0
-                ? `${queuedCount} approved draft${queuedCount === 1 ? "" : "s"} ${queuedCount === 1 ? "is" : "are"} in the publishing queue right now.`
-                : postedCount > 0
-                  ? `${postedCount} draft${postedCount === 1 ? "" : "s"} already made it through publishing.`
-                  : "Approved drafts stay visible in Drafts until you decide when they should move forward."
-          }
-          tone={failedCount > 0 ? "danger" : publishingCount > 0 ? "warning" : "default"}
-        />
-      ) : null}
-      {state === "generation_ready" && secondaryItems.length > 0 ? (
-        <div className="panel">
-          <div className="section-title">Up next</div>
-          <div className="queue-list">
-            {secondaryItems.map((item) => (
-              <QueueReviewRow key={item.id} item={item} href={`/drafts?draftId=${item.draft?.id ?? item.id}`} role="customer" />
-            ))}
+            ) : null}
           </div>
         </div>
       ) : null}

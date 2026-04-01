@@ -38,6 +38,10 @@ class CreatorSettingsUpdate(BaseModel):
     timezone: str | None = None
     posting_window_start: int | None = Field(default=None, ge=0, le=23)
     posting_window_end: int | None = Field(default=None, ge=0, le=23)
+    automation_mode: str | None = None
+    freshness_window_hours: int | None = Field(default=None, ge=1, le=72)
+    auto_post_enabled: bool | None = None
+    auto_post_threshold: int | None = Field(default=None, ge=50, le=100)
     openai_api_key: str | None = None
 
 
@@ -55,6 +59,10 @@ class CustomerOpenAIUpdate(BaseModel):
 
 class PublishJobRetryAction(BaseModel):
     scheduled_for: datetime | None = None
+
+
+class PublishJobScheduleAction(BaseModel):
+    scheduled_for: datetime = Field()
 
 
 class SourceUpdate(BaseModel):

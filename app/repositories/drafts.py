@@ -81,3 +81,15 @@ class DraftRepository:
             .limit(limit)
         )
         return list(self.db.scalars(stmt))
+
+    def list_history_for_workspace_user(self, workspace_user_id: int, limit: int = 50) -> list[DraftPost]:
+        stmt = (
+            select(DraftPost)
+            .where(
+                DraftPost.workspace_user_id == workspace_user_id,
+                DraftPost.status.in_(("posted", "expired", "superseded", "rejected", "failed", "cancelled")),
+            )
+            .order_by(DraftPost.updated_at.desc())
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt))

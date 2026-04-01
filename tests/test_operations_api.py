@@ -127,7 +127,7 @@ def test_creator_settings_read_and_update() -> None:
     assert update_response.json()["watchlist"] == ["TCS", "INFY"]
 
 
-def test_customer_settings_update_cannot_change_admin_fields() -> None:
+def test_customer_settings_update_can_change_customer_automation_fields() -> None:
     client, db = _build_client(role="customer")
     db.add(CreatorSettings(display_name="Desk", max_posts_per_hour=6, watchlist=["TCS"], blocked_phrases=["buy now"]))
     db.commit()
@@ -140,7 +140,7 @@ def test_customer_settings_update_cannot_change_admin_fields() -> None:
     assert response.status_code == 200
     assert response.json()["display_name"] == "Desk 2"
     assert response.json()["watchlist"] == ["INFY"]
-    assert response.json()["max_posts_per_hour"] == 6
+    assert response.json()["max_posts_per_hour"] == 12
 
 
 def test_publish_logs_endpoint_returns_logs() -> None:

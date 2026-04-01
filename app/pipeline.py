@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 import logging
+import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
@@ -18,7 +19,10 @@ from app.repositories.events import EventRepository
 from app.repositories.jobs import PublishJobRepository
 from app.repositories.review import ReviewQueueRepository
 from app.repositories.sources import SourceRepository
+from app.repositories.pipeline_runs import PipelineRunRepository
+from app.models.pipeline_run import PipelineRun
 from app.services.drafting.service import DraftingService
+from app.services.customer_lifecycle import AUTO_POST_ALLOWLIST, apply_customer_lifecycle
 from app.services.normalization.dedupe import make_dedupe_key
 from app.services.normalization.extractors import extract_facts
 from app.services.publishing.x_client import XPublisher
@@ -124,6 +128,43 @@ _CUSTOMER_AUTO_POST_ALLOWLIST = {
     "sebi_circular",
     "sebi_enforcement",
     "macro_release",
+}
+_CUSTOMER_FUND_NOTICE_STOP_WORDS = {
+    "fund",
+    "funds",
+    "fmp",
+    "fixed",
+    "maturity",
+    "plan",
+    "series",
+    "direct",
+    "regular",
+    "growth",
+    "option",
+    "options",
+    "dividend",
+    "quarterly",
+    "half",
+    "halfyearly",
+    "half-yearly",
+    "yearly",
+    "daily",
+    "monthly",
+    "idcw",
+    "days",
+    "payout",
+    "yield",
+}
+_CUSTOMER_COMPANY_STOP_WORDS = {
+    "limited",
+    "ltd",
+    "private",
+    "pvt",
+    "plc",
+    "inc",
+    "and",
+    "company",
+    "co",
 }
 
 
@@ -253,9 +294,80 @@ def _event_has_material_facts(event: Event) -> bool:
     return any(term in headline for term in material_terms)
 
 
+def _event_text_blob(event: Event) -> str:
+    facts = event.summary_facts or {}
+    return " ".join(
+        [
+            str(event.entity_name or ""),
+            str(event.ticker or ""),
+            str(facts.get("headline") or ""),
+            str(facts.get("subject_key") or ""),
+        ]
+    ).lower()
+
+
+def _is_low_signal_fund_notice(event: Event) -> bool:
+    if event.event_type != "dividend":
+        return False
+    text = _event_text_blob(event)
+    return any(
+        term in text
+        for term in (
+            " mutual fund",
+            " fixed maturity plan",
+            " fmp ",
+            " plan ",
+            " idcw",
+            " dividend payout option",
+            " direct plan",
+            " regular plan",
+            " yield fund",
+        )
+    )
+
+
+def _customer_family_key(event: Event) -> str:
+    facts = event.summary_facts or {}
+    headline = str(facts.get("headline") or "")
+    entity_name = str(event.entity_name or facts.get("company") or "")
+    if event.ticker and not _is_low_signal_fund_notice(event):
+        return event.ticker.lower()
+
+    base = (entity_name or headline).lower()
+    tokens = [token for token in re.split(r"[^a-z0-9]+", base) if token]
+    if not tokens:
+        return event.ticker.lower() if event.ticker else "unknown"
+
+    if _is_low_signal_fund_notice(event):
+        family: list[str] = []
+        for token in tokens:
+            if token in _CUSTOMER_FUND_NOTICE_STOP_WORDS:
+                if family:
+                    break
+                continue
+            family.append(token)
+            if len(family) >= 3:
+                break
+        return " ".join(family) if family else (event.ticker.lower() if event.ticker else "unknown")
+
+    company_tokens = [token for token in tokens if token not in _CUSTOMER_COMPANY_STOP_WORDS]
+    return " ".join(company_tokens[:3]) if company_tokens else (event.ticker.lower() if event.ticker else "unknown")
+
+
+def _customer_family_limit(event: Event) -> int:
+    if _is_low_signal_fund_notice(event):
+        return 1
+    if event.event_type in {"dividend", "bonus_split"}:
+        return 1
+    return 2
+
+
 def _customer_draft_skip_reason(event: Event, watchlist_match: bool) -> str | None:
     if event.event_type == "general_update":
         return "filtered_event_type"
+
+    if _is_low_signal_fund_notice(event) and not watchlist_match:
+        return "low_signal_fund_notice"
 
     allowed_types = _CUSTOMER_WATCHLIST_EVENT_TYPES if watchlist_match else _CUSTOMER_FALLBACK_EVENT_TYPES
     if event.event_type not in allowed_types:
@@ -279,10 +391,13 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
     event_repo = EventRepository(db)
     draft_repo = DraftRepository(db)
     review_repo = ReviewQueueRepository(db)
+    job_repo = PublishJobRepository(db)
 
     profile = profile_repo.get_by_workspace_user_id(workspace_user_id)
     if profile is None:
         return {"drafted": 0, "review_items": 0, "matched_events": 0}
+
+    apply_customer_lifecycle(db, profile)
 
     api_key = (profile.token_store or {}).get("openai_api_key")
     drafting_service = DraftingService(api_key=api_key)
@@ -291,9 +406,11 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
     candidates = []
     skip_counts = {
         "filtered_event_type": 0,
+        "low_signal_fund_notice": 0,
         "below_customer_threshold": 0,
         "no_material_facts": 0,
         "already_drafted_for_customer": 0,
+        "duplicate_family": 0,
     }
     for event in event_repo.list_recent(limit=200):
         if event.status not in {"normalized", "drafted", "approved", "queued", "posted"}:
@@ -308,15 +425,33 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
             continue
         candidates.append((event, watchlist_match))
 
-    if watchlist:
-        prioritized = [event for event, is_match in candidates if is_match]
-        fallback = [event for event, is_match in candidates if not is_match]
-        events_to_draft = prioritized + fallback
-    else:
-        events_to_draft = [event for event, _ in candidates]
+    candidates.sort(
+        key=lambda item: (
+            0 if item[1] else 1,
+            -(item[0].importance_score or 0),
+            -(item[0].confidence_score or 0),
+            -int(item[0].id or 0),
+        )
+    )
 
-    eligible_count = len(events_to_draft)
-    events_to_draft = events_to_draft[:_CUSTOMER_DRAFT_LIMIT]
+    if watchlist:
+        ordered_events = [event for event, _ in candidates]
+    else:
+        ordered_events = [event for event, _ in candidates]
+
+    diversified_events: list[Event] = []
+    family_counts: dict[str, int] = {}
+    for event in ordered_events:
+        family_key = _customer_family_key(event)
+        family_count = family_counts.get(family_key, 0)
+        if family_count >= _customer_family_limit(event):
+            skip_counts["duplicate_family"] += 1
+            continue
+        family_counts[family_key] = family_count + 1
+        diversified_events.append(event)
+
+    eligible_count = len(diversified_events)
+    events_to_draft = diversified_events[:_CUSTOMER_DRAFT_LIMIT]
     if not events_to_draft:
         db.commit()
         return {
@@ -329,6 +464,8 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
 
     created = 0
     review_items = 0
+    auto_post_candidates = 0
+    auto_queued = 0
     results: dict[int, tuple[str, dict, float]] = {}
     with ThreadPoolExecutor(max_workers=_DRAFT_MAX_WORKERS) as executor:
         future_to_event = {executor.submit(drafting_service.build_draft, event): event for event in events_to_draft}
@@ -344,6 +481,7 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
         if result is None:
             continue
         draft_text, safety_flags, _latency = result
+        from app.services.drafting.prompts import PROMPT_VERSION
         draft = DraftPost(
             event_id=event.id,
             workspace_user_id=workspace_user_id,
@@ -351,18 +489,35 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
             draft_text=draft_text,
             safety_flags=safety_flags,
             needs_review=True,
+            prompt_version=PROMPT_VERSION,
         )
-        draft.status = "draft"
-        draft_repo.add(draft)
-        review_repo.add(
-            ReviewQueueItem(
-                event_id=event.id,
-                workspace_user_id=workspace_user_id,
-                reason=_review_reason(event, draft, auto_post_threshold),
+        should_auto_post = (
+            profile.automation_mode == "auto_generate_auto_post_high_confidence"
+            and profile.auto_post_enabled
+            and bool((profile.token_store or {}).get("x_access_token"))
+            and event.event_type in AUTO_POST_ALLOWLIST
+            and event.importance_score >= profile.auto_post_threshold
+            and event.confidence_score >= 0.9
+        )
+        if should_auto_post:
+            draft.status = "approved"
+            draft.needs_review = False
+            draft_repo.add(draft)
+            auto_post_candidates += 1
+            if enqueue_customer_approved_draft(db, draft.id, profile):
+                auto_queued += 1
+        else:
+            draft.status = "draft"
+            draft_repo.add(draft)
+            review_repo.add(
+                ReviewQueueItem(
+                    event_id=event.id,
+                    workspace_user_id=workspace_user_id,
+                    reason=_review_reason(event, draft, auto_post_threshold),
+                )
             )
-        )
+            review_items += 1
         created += 1
-        review_items += 1
 
     db.commit()
     return {
@@ -370,6 +525,8 @@ def generate_drafts_for_customer(db: Session, workspace_user_id: int, auto_post_
         "review_items": review_items,
         "matched_events": len(events_to_draft),
         "eligible_events": eligible_count,
+        "auto_post_candidates": auto_post_candidates,
+        "auto_queued": auto_queued,
         **skip_counts,
     }
 
@@ -388,6 +545,10 @@ def publish_ready_jobs(db: Session) -> int:
     job_repo = PublishJobRepository(db)
     creator_settings = CreatorSettingsRepository(db).get_or_create_default()
     customer_repo = CustomerProfileRepository(db)
+    if hasattr(db, "scalars"):
+        for profile in customer_repo.list_eligible_for_background_generation():
+            apply_customer_lifecycle(db, profile)
+        db.commit()
 
     # Release any jobs stuck in "publishing" (e.g. from a crashed worker)
     stuck = job_repo.find_stuck_publishing()
@@ -532,7 +693,7 @@ def _review_reason(event: Event, draft, auto_post_threshold: int = 80) -> str:
 
 def _queue_decision(
     job_repo: PublishJobRepository,
-    creator_settings: CreatorSettings,
+    settings_owner,
     event: Event,
     draft: DraftPost,
 ) -> str:
@@ -541,34 +702,48 @@ def _queue_decision(
 
     now = datetime.now(timezone.utc)
     recent_post_window = now - timedelta(hours=1)
-    if job_repo.count_recent_posted(recent_post_window) >= creator_settings.max_posts_per_hour:
+    recent_count = (
+        job_repo.count_recent_posted_for_workspace_user(draft.workspace_user_id, recent_post_window)
+        if draft.workspace_user_id
+        else job_repo.count_recent_posted(recent_post_window)
+    )
+    if recent_count >= settings_owner.max_posts_per_hour:
         return "rate_limit_hourly"
 
     cooldown_minutes = _cooldown_minutes(event)
     cooldown_since = now - timedelta(minutes=cooldown_minutes)
-    recent_conflict = job_repo.find_recent_conflict(
-        event.dedupe_key,
-        event.summary_facts.get("subject_key"),
-        cooldown_since,
+    recent_conflict = (
+        job_repo.find_recent_conflict_for_workspace_user(
+            draft.workspace_user_id,
+            event.dedupe_key,
+            event.summary_facts.get("subject_key"),
+            cooldown_since,
+        )
+        if draft.workspace_user_id
+        else job_repo.find_recent_conflict(
+            event.dedupe_key,
+            event.summary_facts.get("subject_key"),
+            cooldown_since,
+        )
     )
     if recent_conflict:
         return "cooldown_duplicate"
 
-    if not _in_posting_window(creator_settings, now):
+    if not _in_posting_window(settings_owner, now):
         return "outside_posting_window"
 
     return "queue"
 
 
-def _in_posting_window(creator_settings: CreatorSettings, now_utc: datetime) -> bool:
-    start = creator_settings.posting_window_start
-    end = creator_settings.posting_window_end
+def _in_posting_window(settings_owner, now_utc: datetime) -> bool:
+    start = settings_owner.posting_window_start
+    end = settings_owner.posting_window_end
     if start is None or end is None:
         return True  # no restriction set
     if start == end:
         return True  # degenerate window — treat as no restriction rather than blocking all posts
     try:
-        tz = ZoneInfo(creator_settings.timezone or _DEFAULT_TZ)
+        tz = ZoneInfo(settings_owner.timezone or _DEFAULT_TZ)
     except ZoneInfoNotFoundError:
         tz = ZoneInfo(_DEFAULT_TZ)
     local_hour = now_utc.astimezone(tz).hour
@@ -578,12 +753,12 @@ def _in_posting_window(creator_settings: CreatorSettings, now_utc: datetime) -> 
     return local_hour >= start or local_hour < end
 
 
-def _next_window_open(creator_settings: CreatorSettings, now_utc: datetime) -> datetime:
-    start = creator_settings.posting_window_start
+def _next_window_open(settings_owner, now_utc: datetime) -> datetime:
+    start = settings_owner.posting_window_start
     if start is None:
         return now_utc
     try:
-        tz = ZoneInfo(creator_settings.timezone or _DEFAULT_TZ)
+        tz = ZoneInfo(settings_owner.timezone or _DEFAULT_TZ)
     except ZoneInfoNotFoundError:
         tz = ZoneInfo(_DEFAULT_TZ)
     local_now = now_utc.astimezone(tz)
@@ -632,6 +807,61 @@ def enqueue_approved_draft(db: Session, draft_id: int) -> bool:
     job_repo.add(PublishJob(draft_post_id=draft.id))
     draft.status = "queued"
     return True
+
+
+def enqueue_customer_approved_draft(db: Session, draft_id: int, profile) -> bool:
+    draft_repo = DraftRepository(db)
+    job_repo = PublishJobRepository(db)
+    draft = draft_repo.get(draft_id)
+    if draft is None:
+        return False
+    event = draft_repo.get_event(draft)
+    if event is None:
+        draft.status = "failed"
+        return False
+    decision = _queue_decision(job_repo, profile, event, draft)
+    if decision == "outside_posting_window":
+        scheduled_for = _next_window_open(profile, datetime.now(timezone.utc))
+        job_repo.add(PublishJob(draft_post_id=draft.id, scheduled_for=scheduled_for))
+        draft.status = "queued"
+        return True
+    if decision != "queue":
+        draft.status = "approved"
+        draft.needs_review = False
+        draft.safety_flags = {**draft.safety_flags, "guardrail_reason": decision}
+        return False
+    job_repo.add(PublishJob(draft_post_id=draft.id))
+    draft.status = "queued"
+    return True
+
+
+def run_background_customer_generation(db: Session, auto_post_threshold: int) -> dict[str, int]:
+    profile_repo = CustomerProfileRepository(db)
+    run_repo = PipelineRunRepository(db)
+    counts = {"customers_processed": 0, "drafted": 0, "review_items": 0, "auto_queued": 0}
+    for profile in profile_repo.list_eligible_for_background_generation():
+        if not (profile.token_store or {}).get("openai_api_key"):
+            continue
+        run = run_repo.add(
+            PipelineRun(
+                workspace_user_id=profile.workspace_user_id,
+                requested_by="system",
+                scope="scheduled_customer_generation",
+                status="running",
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+        result = generate_drafts_for_customer(db, profile.workspace_user_id, auto_post_threshold)
+        run.status = "completed" if result.get("drafted", 0) > 0 else "empty"
+        run.result_counts = result
+        run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        counts["customers_processed"] += 1
+        counts["drafted"] += result.get("drafted", 0)
+        counts["review_items"] += result.get("review_items", 0)
+        counts["auto_queued"] += result.get("auto_queued", 0)
+    return counts
 
 
 def _event_latest_date(facts: dict, item) -> datetime.date | None:

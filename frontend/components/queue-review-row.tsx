@@ -1,6 +1,7 @@
 import type { Route } from "next";
 import Link from "next/link";
 
+import { getFreshnessLabel, getFreshnessTone } from "@/lib/lifecycle-ui";
 import { ViewerRole } from "@/lib/session";
 import { ReviewItem } from "@/lib/types";
 
@@ -27,6 +28,8 @@ function getTypeLabel(item: ReviewItem, role: ViewerRole) {
 }
 
 export function QueueReviewRow({ item, href = "/drafts", role = "admin" }: { item: ReviewItem; href?: string; role?: ViewerRole }) {
+  const freshnessLabel = role === "customer" ? getFreshnessLabel(item) : null;
+  const freshnessTone = getFreshnessTone(item);
   return (
     <Link href={href as Route} className="queue-review-row queue-review-row-link">
       <div className="row space">
@@ -46,6 +49,7 @@ export function QueueReviewRow({ item, href = "/drafts", role = "admin" }: { ite
       <div className="queue-row-title">
         {String(item.event?.summary_facts?.headline ?? item.draft?.draft_text ?? "Untitled review item")}
       </div>
+      {freshnessLabel ? <div className={`queue-row-lifecycle queue-row-lifecycle-${freshnessTone}`}>{freshnessLabel}</div> : null}
       <div className="card-subtle">
         Source {String(item.event?.summary_facts?.source_name ?? "Unknown")} | Score {item.event?.importance_score ?? "-"} |
         {" "}Confidence {item.event?.confidence_score ?? "-"}

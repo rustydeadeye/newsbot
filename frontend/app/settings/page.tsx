@@ -112,6 +112,13 @@ export default async function SettingsPage() {
               <SettingsForm settings={settings} role={role} section="filters" />
             </SettingsSection>
             <SettingsSection
+              eyebrow="Automation"
+              title="How Newsbot should work while you are away"
+              description="Choose whether drafts should be generated automatically, how long they stay fresh, and whether macro/regulatory items may auto-post."
+            >
+              <SettingsForm settings={settings} role={role} section="automation" />
+            </SettingsSection>
+            <SettingsSection
               eyebrow="Publishing connection"
               title="Connect X when you are ready"
               description="X is only needed for publishing workflows. You can review and generate drafts without connecting it."

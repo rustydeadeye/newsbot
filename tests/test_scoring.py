@@ -1,7 +1,7 @@
 from datetime import date
 from types import SimpleNamespace
 
-from app.pipeline import _customer_draft_skip_reason, _event_has_material_facts
+from app.pipeline import _customer_draft_skip_reason, _customer_family_key, _event_has_material_facts
 from app.services.normalization.classifier import classify_event_type
 from app.services.normalization.dedupe import make_dedupe_key
 from app.services.scoring import freshness_bonus, score_event
@@ -59,3 +59,29 @@ def test_customer_generation_allows_watchlist_match_with_material_fact() -> None
     )
     assert _event_has_material_facts(event) is True
     assert _customer_draft_skip_reason(event, watchlist_match=True) is None
+
+
+def test_customer_generation_skips_low_signal_fund_dividend_without_watchlist_match() -> None:
+    event = SimpleNamespace(
+        event_type="dividend",
+        importance_score=78,
+        entity_name="ICICI Prudential Fixed Maturity Plan Series 84 - 1288 Days Plan E",
+        ticker=None,
+        summary_facts={
+            "headline": "ICICI Prudential Fixed Maturity Plan Series 84 - 1288 Days Plan E - Quarterly Dividend Payout Option",
+            "numbers": [{"type": "per_share", "currency": "Rs", "value": "1.2"}],
+            "event_date": "2026-03-30",
+        },
+    )
+    assert _customer_draft_skip_reason(event, watchlist_match=False) == "low_signal_fund_notice"
+    assert _customer_draft_skip_reason(event, watchlist_match=True) is None
+
+
+def test_customer_family_key_collapses_same_fund_family() -> None:
+    event = SimpleNamespace(
+        event_type="dividend",
+        entity_name="ICICI Prudential Multiple Yield Fund - Series 14 - Plan A 1228 Days Direct Plan",
+        ticker=None,
+        summary_facts={"headline": "ICICI Prudential Multiple Yield Fund - Series 14 - Plan A 1228 Days Direct Plan Dividend"},
+    )
+    assert _customer_family_key(event) == "icici prudential multiple"

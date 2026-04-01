@@ -1,3 +1,4 @@
+import { getFreshnessLabel, getFreshnessTone } from "@/lib/lifecycle-ui";
 import { ReviewActions } from "@/components/review-actions";
 import { getRecommendedPublishPlan } from "@/lib/publish-plan";
 import { ViewerRole } from "@/lib/session";
@@ -49,6 +50,8 @@ export function LeadReviewCard({
   publishSettings?: CreatorSettings | null;
 }) {
   const recommendedPlan = canPublish ? getRecommendedPublishPlan(publishSettings) : null;
+  const freshnessLabel = role === "customer" ? getFreshnessLabel(item, publishSettings?.timezone) : null;
+  const freshnessTone = getFreshnessTone(item);
   return (
     <div className="lead-review-card">
       <div className="lead-review-top">
@@ -65,6 +68,7 @@ export function LeadReviewCard({
           <div className="section-label">What happened</div>
           <h3>{String(item.event?.summary_facts?.headline ?? item.draft?.draft_text ?? "Untitled review item")}</h3>
         </div>
+        {freshnessLabel ? <div className={`lifecycle-banner lifecycle-banner-${freshnessTone}`}>{freshnessLabel}</div> : null}
         {item.event?.summary_facts?.document_url || item.event?.summary_facts?.source_url ? (
           <a
             className="source-link"
@@ -86,6 +90,11 @@ export function LeadReviewCard({
               <strong>{getLifecycleLabel(item.status)}</strong>
               <span>{String(item.event?.summary_facts?.source_name ?? "Unknown source")}</span>
             </div>
+            {role === "customer" ? (
+              <p className="card-subtle" style={{ marginTop: "0.75rem" }}>
+                Active review items stay here only while they are still actionable. Older or replaced items move to history automatically.
+              </p>
+            ) : null}
           </div>
           <div className="lead-review-block">
             <div className="section-label">What happens next</div>

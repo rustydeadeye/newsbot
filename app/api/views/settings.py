@@ -64,7 +64,22 @@ def update_creator_settings(
             viewer.workspace_user_id,
             default_display_name=viewer.display_name,
         )
-        allowed_keys = {"display_name", "tone", "language", "watchlist", "blocked_phrases", "openai_api_key"}
+        allowed_keys = {
+            "display_name",
+            "tone",
+            "language",
+            "watchlist",
+            "blocked_phrases",
+            "openai_api_key",
+            "automation_mode",
+            "freshness_window_hours",
+            "max_posts_per_hour",
+            "timezone",
+            "posting_window_start",
+            "posting_window_end",
+            "auto_post_enabled",
+            "auto_post_threshold",
+        }
         update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
         if "openai_api_key" in update_payload:
             token_store = dict(settings.token_store or {})

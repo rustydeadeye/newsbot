@@ -24,6 +24,10 @@ export type DraftSummary = {
   draft_text: string;
   safety_flags: Record<string, unknown>;
   needs_review: boolean;
+  lifecycle_state?: string;
+  inactive_reason?: string | null;
+  fresh_until?: string | null;
+  updated_at?: string | null;
   publish_job?: PublishJob | null;
   event?: EventSummary | null;
 };
@@ -36,6 +40,9 @@ export type ReviewItem = {
   status: string;
   sla_due_at: string | null;
   overdue: boolean;
+  lifecycle_state?: string;
+  inactive_reason?: string | null;
+  fresh_until?: string | null;
   event: EventSummary | null;
   draft: DraftSummary | null;
 };
@@ -81,6 +88,8 @@ export type CreatorSettings = {
   tone: string;
   language: string;
   max_posts_per_hour: number;
+  automation_mode?: string;
+  freshness_window_hours?: number;
   watchlist: string[];
   blocked_phrases: string[];
   timezone: string;
@@ -88,6 +97,9 @@ export type CreatorSettings = {
   posting_window_end: number | null;
   x_connected: boolean;
   openai_configured: boolean;
+  auto_post_enabled?: boolean;
+  auto_post_threshold?: number;
+  last_seen_at?: string | null;
 };
 
 export type OnboardingStatus = {
@@ -135,11 +147,21 @@ export type CustomerHomePayload = {
   queue: ReviewItem[];
   approved_drafts: DraftSummary[];
   settings: CreatorSettings;
+  since_last_seen_at?: string | null;
+  since_last_seen_summary: Record<string, number>;
+  recent_activity: {
+    draft_id: number;
+    status: string;
+    headline: string;
+    updated_at: string | null;
+    inactive_reason?: string | null;
+  }[];
 };
 
 export type CustomerDraftsPayload = {
   drafts: DraftSummary[];
   approved_drafts: DraftSummary[];
   rejected_drafts: DraftSummary[];
+  history: DraftSummary[];
   settings: CreatorSettings;
 };

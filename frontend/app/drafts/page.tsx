@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { ActiveRunRefresher } from "@/components/active-run-refresher";
 import { AdminApiErrorPanel } from "@/components/admin-api-error-panel";
 import { CustomerDegradedState } from "@/components/customer-degraded-state";
+import { CustomerPublishJobActions } from "@/components/customer-publish-job-actions";
 import { EmptyState } from "@/components/empty-state";
 import { GenerateDraftsButton } from "@/components/generate-drafts-button";
 import { GuidePanel } from "@/components/guide-panel";
@@ -13,7 +14,9 @@ import { ReviewActions } from "@/components/review-actions";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getCurrentPipelineRun, getCustomerDraftsWorkspace } from "@/lib/api";
+import { getBucketLabel, getFreshnessLabel, getInactiveReasonCopy } from "@/lib/lifecycle-ui";
 import { formatPublishTime } from "@/lib/publish-plan";
+import { DraftSummary } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
 export default async function DraftsPage({
@@ -47,6 +50,7 @@ export default async function DraftsPage({
   let drafts;
   let approvedDrafts;
   let rejectedDrafts;
+  let historyDrafts: DraftSummary[] = [];
   let currentRun = null;
   let customerSettings = null;
   try {
@@ -58,6 +62,7 @@ export default async function DraftsPage({
       drafts = workspace.drafts;
       approvedDrafts = workspace.approved_drafts;
       rejectedDrafts = workspace.rejected_drafts;
+      historyDrafts = workspace.history;
       customerSettings = workspace.settings;
       currentRun = run;
     } else {
@@ -95,6 +100,11 @@ export default async function DraftsPage({
         return 0;
       })
     : drafts;
+  const readyToPublishDrafts = approvedDrafts.filter((draft) => draft.status === "approved");
+  const scheduledOrQueuedDrafts = approvedDrafts.filter((draft) => ["queued", "publishing"].includes(draft.status));
+  const recentlyPostedDrafts = approvedDrafts.filter((draft) => draft.status === "posted");
+  const needsAttentionDrafts = approvedDrafts.filter((draft) => draft.status === "failed");
+  const inactiveHistoryDrafts = historyDrafts.filter((draft) => ["expired", "superseded", "rejected"].includes(draft.status));
 
   return (
     <div className="page-grid">
@@ -126,19 +136,28 @@ export default async function DraftsPage({
             : "Use this screen when you want more room to edit before approving or rejecting a draft."
         }
       />
-      {role === "customer" && approvedDrafts.length > 0 ? (
+      {role === "customer" ? (
         <StatusPanel
-          eyebrow="Approved drafts"
-          title={
-            approvedDrafts.find((draft) => draft.publish_job?.scheduled_for)
-              ? `Next scheduled post: ${formatPublishTime(
-                  approvedDrafts.find((draft) => draft.publish_job?.scheduled_for)?.publish_job?.scheduled_for as string,
-                  customerSettings?.timezone ?? "Asia/Kolkata"
-                )}`
-              : "Approved drafts are waiting in your publishing flow"
-          }
-          description="Approved drafts no longer disappear. Keep editing below, and use the approved section to track what will post next."
+          eyebrow="How this queue works"
+          title="Active queue shows only currently actionable items"
+          description="Fresh and overdue items stay here while they still deserve a decision. Older or replaced items move into history automatically."
         />
+      ) : null}
+      {role === "customer" ? (
+        <div className="metrics metrics-compact">
+          <div className="kpi-card">
+            <div className="metric-label">Needs review</div>
+            <div className="metric-value">{sortedDrafts.length}</div>
+          </div>
+          <div className="kpi-card">
+            <div className="metric-label">Ready to publish</div>
+            <div className="metric-value">{readyToPublishDrafts.length}</div>
+          </div>
+          <div className="kpi-card">
+            <div className="metric-label">Scheduled next</div>
+            <div className="metric-value">{scheduledOrQueuedDrafts.length}</div>
+          </div>
+        </div>
       ) : null}
       <div className="draft-list">
         {sortedDrafts.length === 0 ? (
@@ -186,7 +205,7 @@ export default async function DraftsPage({
                   ) : null}
                 </div>
                 <div className="lead-review-block">
-                  <div className="section-label">Editing mode</div>
+                  <div className="section-label">What this means now</div>
                   <div className="card-subtle">
                     {draft.id === selectedDraftId
                       ? "You opened this draft from Home. Keep refining here until you are ready to approve or reject it."
@@ -194,6 +213,11 @@ export default async function DraftsPage({
                         ? "Use this workspace for a deliberate pass before approving."
                         : "This draft has already moved out of the live review path."}
                   </div>
+                  {getFreshnessLabel(draft, customerSettings?.timezone) ? (
+                    <div className="lifecycle-banner lifecycle-banner-inline lifecycle-banner-calm" style={{ marginTop: "0.75rem" }}>
+                      {getFreshnessLabel(draft, customerSettings?.timezone)}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -213,34 +237,119 @@ export default async function DraftsPage({
       </div>
       {role === "customer" && approvedDrafts.length > 0 ? (
         <div className="panel">
-          <div className="section-title">Approved & scheduled</div>
+          <div className="section-title">Publishing workflow</div>
+          {readyToPublishDrafts.length > 0 ? (
+            <div className="stack" style={{ marginTop: "0.75rem" }}>
+              <div className="section-label">Ready to publish</div>
+              {readyToPublishDrafts.map((draft) => (
+                <div key={`ready-${draft.id}`} className="publish-row">
+                  <div className="row space">
+                    <span className="pill">approved</span>
+                    <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
+                  </div>
+                  <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                  <div className="card-subtle">Approved and waiting for schedule. Choose when it should move forward.</div>
+                  <div className="card-subtle">{draft.draft_text}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {scheduledOrQueuedDrafts.length > 0 ? (
+            <div className="stack" style={{ marginTop: "0.75rem" }}>
+              <div className="section-label">Scheduled</div>
+              {scheduledOrQueuedDrafts.map((draft) => (
+                <div key={`scheduled-${draft.id}`} className="publish-row">
+                  <div className="row space">
+                    <span className={draft.status === "publishing" ? "pill warn" : "pill subtle"}>
+                      {getBucketLabel(draft.status, draft.lifecycle_state)}
+                    </span>
+                    <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
+                  </div>
+                  <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                  <div className="card-subtle">{draft.draft_text}</div>
+                  <div className="card-subtle">
+                    {draft.publish_job?.scheduled_for
+                      ? `Scheduled for ${formatPublishTime(draft.publish_job.scheduled_for, customerSettings?.timezone ?? "Asia/Kolkata")}`
+                      : draft.status === "publishing"
+                        ? "Queued for immediate publishing and moving through delivery now."
+                        : "Queued for immediate publishing."}
+                  </div>
+                  {draft.publish_job ? (
+                    <CustomerPublishJobActions
+                      jobId={draft.publish_job.id}
+                      status={draft.publish_job.status}
+                      scheduledFor={draft.publish_job.scheduled_for}
+                      settings={customerSettings}
+                      freshUntil={draft.fresh_until}
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {needsAttentionDrafts.length > 0 ? (
+            <div className="stack" style={{ marginTop: "0.75rem" }}>
+              <div className="section-label">Needs attention</div>
+              {needsAttentionDrafts.map((draft) => (
+                <div key={`attention-${draft.id}`} className="publish-row failed">
+                  <div className="row space">
+                    <span className="pill danger">Needs attention</span>
+                    <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
+                  </div>
+                  <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                  <div className="card-subtle">Publishing did not complete. Review the item and retry or move it back to approved.</div>
+                  {draft.publish_job ? (
+                    <CustomerPublishJobActions
+                      jobId={draft.publish_job.id}
+                      status={draft.publish_job.status}
+                      scheduledFor={draft.publish_job.scheduled_for}
+                      settings={customerSettings}
+                      freshUntil={draft.fresh_until}
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {recentlyPostedDrafts.length > 0 ? (
+            <div className="stack" style={{ marginTop: "0.75rem" }}>
+              <div className="section-label">Recently posted</div>
+              {recentlyPostedDrafts.map((draft) => (
+                <div key={`posted-${draft.id}`} className="publish-row">
+                  <div className="row space">
+                    <span className="pill subtle">posted</span>
+                    <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
+                  </div>
+                  <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
+                  <div className="card-subtle">Posted successfully.</div>
+                  <div className="card-subtle">{draft.draft_text}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {role === "admin" && rejectedDrafts.length > 0 ? (
+        <RejectedDraftsSection drafts={rejectedDrafts} />
+      ) : null}
+      {role === "customer" && inactiveHistoryDrafts.length > 0 ? (
+        <div className="panel">
+          <div className="section-title">History</div>
           <div className="stack" style={{ marginTop: "0.75rem" }}>
-            {approvedDrafts.map((draft) => (
-              <div key={draft.id} className="publish-row">
+            {inactiveHistoryDrafts.map((draft) => (
+              <div key={`history-${draft.id}`} className="publish-row">
                 <div className="row space">
-                  <span className={draft.status === "posted" ? "pill success" : draft.status === "queued" ? "pill warn" : "pill"}>
-                    {draft.status.replaceAll("_", " ")}
+                  <span className="pill subtle">{(draft.lifecycle_state ?? draft.status).replaceAll("_", " ")}</span>
+                  <span className="card-subtle">
+                    {draft.updated_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(draft.updated_at)) : ""}
                   </span>
-                  <span className="mono">{draft.event?.ticker ?? "MARKET"}</span>
                 </div>
                 <div className="queue-row-title">{String(draft.event?.summary_facts?.headline ?? draft.draft_text)}</div>
-                <div className="card-subtle">{draft.draft_text}</div>
-                <div className="card-subtle">
-                  {draft.publish_job?.scheduled_for
-                    ? `Scheduled for ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
-                        new Date(draft.publish_job.scheduled_for)
-                      )}`
-                    : draft.publish_job
-                      ? "Queued for immediate publishing"
-                      : "Approved and waiting for your next publishing step"}
-                </div>
+                <div className="card-subtle">{getInactiveReasonCopy(draft.inactive_reason) ?? draft.draft_text}</div>
               </div>
             ))}
           </div>
         </div>
-      ) : null}
-      {rejectedDrafts.length > 0 ? (
-        <RejectedDraftsSection drafts={rejectedDrafts} />
       ) : null}
     </div>
   );

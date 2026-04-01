@@ -76,6 +76,18 @@ class PublishJobRepository:
         )
         return int(self.db.scalar(stmt) or 0)
 
+    def count_recent_posted_for_workspace_user(self, workspace_user_id: int, since: datetime) -> int:
+        stmt = (
+            select(func.count(PublishJob.id))
+            .join(DraftPost, DraftPost.id == PublishJob.draft_post_id)
+            .where(
+                PublishJob.status == "posted",
+                PublishJob.updated_at >= since,
+                DraftPost.workspace_user_id == workspace_user_id,
+            )
+        )
+        return int(self.db.scalar(stmt) or 0)
+
     def exists_for_draft(self, draft_post_id: int) -> bool:
         stmt = select(PublishJob.id).where(PublishJob.draft_post_id == draft_post_id).limit(1)
         return self.db.scalar(stmt) is not None
@@ -103,6 +115,30 @@ class PublishJobRepository:
             .join(DraftPost, DraftPost.id == PublishJob.draft_post_id)
             .join(Event, Event.id == DraftPost.event_id)
             .where(
+                PublishJob.status.in_(("queued", "posted")),
+                PublishJob.updated_at >= since,
+                or_(*key_conditions),
+            )
+            .limit(1)
+        )
+        return self.db.scalar(stmt)
+
+    def find_recent_conflict_for_workspace_user(
+        self,
+        workspace_user_id: int,
+        dedupe_key: str,
+        subject_key: str | None,
+        since: datetime,
+    ) -> int | None:
+        key_conditions = [Event.dedupe_key == dedupe_key]
+        if subject_key is not None:
+            key_conditions.append(Event.summary_facts["subject_key"].as_string() == subject_key)
+        stmt = (
+            select(PublishJob.id)
+            .join(DraftPost, DraftPost.id == PublishJob.draft_post_id)
+            .join(Event, Event.id == DraftPost.event_id)
+            .where(
+                DraftPost.workspace_user_id == workspace_user_id,
                 PublishJob.status.in_(("queued", "posted")),
                 PublishJob.updated_at >= since,
                 or_(*key_conditions),
