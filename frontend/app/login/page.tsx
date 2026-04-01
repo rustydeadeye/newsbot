@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
 
 import { AuthForm } from "@/components/auth-form";
+import { getRoleHomePath } from "@/lib/product-mode";
 import { getServerViewer } from "@/lib/viewer";
 
 export default async function LoginPage() {
   const viewer = await getServerViewer();
   if (viewer) {
-    redirect("/");
+    redirect(getRoleHomePath(viewer.viewer.role));
   }
 
   return (
