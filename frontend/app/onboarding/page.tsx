@@ -3,12 +3,16 @@ import { redirect } from "next/navigation";
 import { CustomerDegradedState } from "@/components/customer-degraded-state";
 import { OnboardingWizard } from "@/components/onboarding-wizard";
 import { ShellHeader } from "@/components/shell-header";
+import { getRoleHomePath, IS_AUTOPOST_MODE } from "@/lib/product-mode";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
 export default async function OnboardingPage() {
   const { viewer, onboarding, onboardingError } = await requireWorkspaceSession();
   if (viewer.role !== "customer") {
     redirect("/");
+  }
+  if (IS_AUTOPOST_MODE) {
+    redirect(getRoleHomePath("customer"));
   }
   if (onboardingError) {
     return (

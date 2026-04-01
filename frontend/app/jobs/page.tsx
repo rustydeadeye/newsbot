@@ -5,11 +5,16 @@ import { PublishQueuePanel } from "@/components/publish-queue-panel";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getPublishJobs, getPublishLogs } from "@/lib/api";
+import { getRoleHomePath, IS_AUTOPOST_MODE } from "@/lib/product-mode";
 import { requireServerViewer } from "@/lib/viewer";
+import { redirect } from "next/navigation";
 
 export default async function JobsPage() {
   const { viewer, accessToken } = await requireServerViewer();
   const role = viewer.role;
+  if (IS_AUTOPOST_MODE) {
+    redirect(getRoleHomePath(role));
+  }
   if (role !== "admin") {
     return <AccessDenied title="Publishing" description="Track delivery queue health, failures, and posting outcomes." />;
   }

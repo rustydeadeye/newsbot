@@ -15,6 +15,7 @@ import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getCurrentPipelineRun, getCustomerDraftsWorkspace } from "@/lib/api";
 import { formatOptionalDateTime, getBucketLabel, getFreshnessLabel, getInactiveReasonCopy, getSafeText } from "@/lib/lifecycle-ui";
+import { getRoleHomePath, IS_AUTOPOST_MODE } from "@/lib/product-mode";
 import { formatPublishTime } from "@/lib/publish-plan";
 import { DraftSummary } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
@@ -28,6 +29,11 @@ export default async function DraftsPage({
   const role = viewer.role;
   const params = (await searchParams) ?? {};
   const selectedDraftId = params.draftId ? Number(params.draftId) : null;
+
+  if (IS_AUTOPOST_MODE) {
+    redirect(getRoleHomePath(role));
+  }
+
   if (role === "customer" && onboardingError) {
     return (
       <div className="page-grid">

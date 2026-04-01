@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { Route } from "next";
 
 import { NavShell } from "@/components/nav-shell";
+import { getRoleHomePath, IS_AUTOPOST_MODE } from "@/lib/product-mode";
 import { getServerViewer } from "@/lib/viewer";
 import "./globals.css";
 
@@ -39,7 +40,18 @@ export default async function RootLayout({
         {auth ? (
           <div className="shell">
             <aside className="sidebar">
-              <NavShell viewer={auth.viewer} items={auth.viewer.role === "admin" ? adminNavItems : customerNavItems} />
+              <NavShell
+                viewer={auth.viewer}
+                items={
+                  IS_AUTOPOST_MODE
+                    ? auth.viewer.role === "admin"
+                      ? [{ href: getRoleHomePath("admin") as Route, label: "Wire Feed" }, { href: "/settings" as Route, label: "Settings" }]
+                      : [{ href: getRoleHomePath("customer") as Route, label: "Autopost" }]
+                    : auth.viewer.role === "admin"
+                      ? adminNavItems
+                      : customerNavItems
+                }
+              />
             </aside>
             <main className="content">{children}</main>
           </div>

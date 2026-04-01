@@ -9,12 +9,16 @@ import { ShellHeader } from "@/components/shell-header";
 import { SourceToggle } from "@/components/source-toggle";
 import { StatusPanel } from "@/components/status-panel";
 import { getCreatorSettings, getSources } from "@/lib/api";
+import { getRoleHomePath, IS_AUTOPOST_MODE } from "@/lib/product-mode";
 import { CreatorSettings, SourceSummary } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
 export default async function SettingsPage() {
   const { viewer, accessToken, onboarding, onboardingError } = await requireWorkspaceSession();
   const role = viewer.role;
+  if (IS_AUTOPOST_MODE && role === "customer") {
+    redirect(getRoleHomePath(role));
+  }
   if (role === "customer" && onboardingError) {
     return (
       <div className="page-grid">

@@ -15,6 +15,7 @@ import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { getCurrentPipelineRun, getCustomerHomeWorkspace, getPublishJobs, getReviewQueue, getSources } from "@/lib/api";
 import { formatOptionalDateTime, getActivityLabel, getInactiveReasonCopy } from "@/lib/lifecycle-ui";
+import { getRoleHomePath, IS_AUTOPOST_MODE } from "@/lib/product-mode";
 import { formatPublishTime } from "@/lib/publish-plan";
 import { CustomerWorkspaceState, PipelineRun, ReviewItem } from "@/lib/types";
 import { requireWorkspaceSession } from "@/lib/viewer";
@@ -40,6 +41,10 @@ function getCustomerWorkspaceState(queue: ReviewItem[], currentRun: PipelineRun 
 export default async function HomePage() {
   const { viewer, accessToken, onboarding, onboardingError } = await requireWorkspaceSession();
   const role = viewer.role;
+
+  if (IS_AUTOPOST_MODE) {
+    redirect(getRoleHomePath(role));
+  }
 
   if (role === "customer" && onboardingError) {
     return (

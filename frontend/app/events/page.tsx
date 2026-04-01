@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/empty-state";
 import { GuidePanel } from "@/components/guide-panel";
 import { ShellHeader } from "@/components/shell-header";
 import { getEvents } from "@/lib/api";
+import { getRoleHomePath, IS_AUTOPOST_MODE } from "@/lib/product-mode";
 import { requireWorkspaceSession } from "@/lib/viewer";
 
 const DRAFT_STATUS_LABELS: Record<string, string> = {
@@ -21,6 +22,11 @@ const DRAFT_STATUS_LABELS: Record<string, string> = {
 export default async function EventsPage() {
   const { viewer, accessToken, onboarding, onboardingError } = await requireWorkspaceSession();
   const role = viewer.role;
+
+  if (IS_AUTOPOST_MODE) {
+    redirect(getRoleHomePath(role));
+  }
+
   if (role === "customer" && onboardingError) {
     return (
       <div className="page-grid">
