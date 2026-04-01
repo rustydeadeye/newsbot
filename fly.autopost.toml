@@ -5,7 +5,9 @@ primary_region = "bom"
 
 [env]
   APP_ENV = "production"
+  PIPELINE_ENABLED = "false"
   PIPELINE_INTERVAL_SEC = "900"
+  ENGAGEMENT_FETCH_ENABLED = "false"
   WIRE_FEED_ENABLED = "true"
   WIRE_FEED_INTERVAL_SEC = "900"
   OPENAI_MODEL = "gpt-4.1-mini"

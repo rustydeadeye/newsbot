@@ -115,7 +115,7 @@ Important notes:
 
 - The new autopost branch can share the same Supabase project for now, but Fly and Netlify should be separate.
 - Update `FRONTEND_URL`, `CORS_ORIGINS`, and `X_REDIRECT_URI` so the new X OAuth flow returns to the autopost frontend instead of the old product.
-- The autopost backend is designed to run with `WIRE_FEED_ENABLED=true`.
+- The autopost backend is designed to run with `WIRE_FEED_ENABLED=true`, `PIPELINE_ENABLED=false`, and `ENGAGEMENT_FETCH_ENABLED=false` so the deployment stays wire-only.
 
 Example backend deploy:
 

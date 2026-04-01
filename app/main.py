@@ -64,22 +64,24 @@ def _run_wire_feed() -> None:
 async def _lifespan(app: FastAPI):
     settings = get_settings()
     scheduler = BackgroundScheduler(daemon=True)
-    scheduler.add_job(
-        _run_pipeline,
-        trigger="interval",
-        seconds=settings.pipeline_interval_sec,
-        id="pipeline_cycle",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        _run_engagement_fetch,
-        trigger="interval",
-        hours=1,
-        id="engagement_fetch",
-        max_instances=1,
-        coalesce=True,
-    )
+    if settings.pipeline_enabled:
+        scheduler.add_job(
+            _run_pipeline,
+            trigger="interval",
+            seconds=settings.pipeline_interval_sec,
+            id="pipeline_cycle",
+            max_instances=1,
+            coalesce=True,
+        )
+    if settings.engagement_fetch_enabled:
+        scheduler.add_job(
+            _run_engagement_fetch,
+            trigger="interval",
+            hours=1,
+            id="engagement_fetch",
+            max_instances=1,
+            coalesce=True,
+        )
     if settings.wire_feed_enabled:
         scheduler.add_job(
             _run_wire_feed,
@@ -91,8 +93,10 @@ async def _lifespan(app: FastAPI):
         )
     scheduler.start()
     logging.getLogger(__name__).info(
-        "Scheduler started — pipeline interval=%ds, engagement fetch every 1h, wire feed enabled=%s interval=%ds",
+        "Scheduler started — pipeline enabled=%s interval=%ds, engagement enabled=%s every 1h, wire feed enabled=%s interval=%ds",
+        settings.pipeline_enabled,
         settings.pipeline_interval_sec,
+        settings.engagement_fetch_enabled,
         settings.wire_feed_enabled,
         settings.wire_feed_interval_sec,
     )
