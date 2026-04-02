@@ -17,6 +17,54 @@ from app.wire_feed.sources import WireSourceDef
 WIRE_AUTO_POST_THRESHOLD = 80
 _DISPLAY_TZ = ZoneInfo("Asia/Kolkata")
 
+_LOW_SIGNAL_WIRE_TERMS = (
+    "shareholding disclosure",
+    "shareholding details",
+    "promoter acquires",
+    "promoter increases stake",
+    "promoter reduces stake",
+    "promoter stake drops",
+    "promoter pledged",
+    "promoter pledges",
+    "pledge disclosure",
+    "pledged shares",
+    "special window",
+    "physical securities",
+    "share transfer",
+    "postal ballot",
+    "e-voting",
+    "investor meet",
+    "investor meeting",
+    "investor conference",
+    "board meet",
+    "board meeting",
+    "company secretary",
+    "independent director",
+    "compliance certificate",
+    "sebi compliance certificate",
+    "non-large corporate",
+    "non-lc status",
+    "non-lce status",
+    "price movement query",
+    "price movement inquiry",
+    "record date for share allotment",
+)
+
+_LOW_SIGNAL_MANAGEMENT_TERMS = (
+    "appoints",
+    "appointed",
+    "resigns",
+    "retires",
+    "superannuates",
+    "steps down",
+    "completes tenure",
+    "promotes",
+    "new company secretary",
+    "human resources",
+    "chief commercial officer",
+    "chief strategy officer",
+)
+
 
 @dataclass
 class WirePipelineResult:
@@ -67,6 +115,8 @@ def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> l
     for fetched in items:
         source_item = _fake_source_item(fetched)
         facts = extract_facts(source, source_item)
+        if _should_drop_wire_candidate(facts):
+            continue
         importance = score_event(
             source_def.name,
             facts["event_class"],
@@ -193,3 +243,36 @@ def _prefer_result(candidate: WirePipelineResult, existing: WirePipelineResult) 
     if candidate_date != existing_date:
         return candidate_date > existing_date
     return candidate.importance_score > existing.importance_score
+
+
+def _should_drop_wire_candidate(facts: dict) -> bool:
+    event_type = str(facts.get("event_class") or "")
+    headline = str(facts.get("headline") or "")
+    article_text = str(facts.get("article_text") or "")
+    combined = f"{headline} {article_text}".lower()
+
+    if any(term in combined for term in _LOW_SIGNAL_WIRE_TERMS):
+        return True
+
+    if event_type == "management_change" and any(term in combined for term in _LOW_SIGNAL_MANAGEMENT_TERMS):
+        return True
+
+    if event_type == "general_update" and any(
+        term in combined
+        for term in (
+            "opens special window",
+            "publishes hindi notice",
+            "publishes newspaper notice",
+            "files regulatory disclosure",
+            "submits regulatory certificate",
+            "responds to bse price movement",
+            "record date",
+            "appoints rta",
+            "grants stock options",
+            "esop shares",
+            "relocates registered office",
+        )
+    ):
+        return True
+
+    return False
