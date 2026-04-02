@@ -87,7 +87,9 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
 def _publish_due_jobs(db, now: datetime) -> dict[str, int]:
     job_repo = WireJobRepository(db)
     publisher = XPublisher()
-    jobs = job_repo.claim_ready(now=now)
+    # Only publish one due wire job per cycle so late resume/backlog states
+    # do not flush multiple overdue posts at once.
+    jobs = job_repo.claim_ready(now=now, limit=1)
     posted = 0
     failed = 0
     for job in jobs:

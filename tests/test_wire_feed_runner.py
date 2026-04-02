@@ -30,6 +30,7 @@ def test_publish_due_jobs_requeues_runtime_errors_before_fail(monkeypatch) -> No
             self.db = db
 
         def claim_ready(self, now, limit=20):
+            assert limit == 1
             return [job]
 
         def has_active_duplicate(self, dedupe_key, exclude_job_id=None):
@@ -88,6 +89,7 @@ def test_publish_due_jobs_skips_active_duplicate(monkeypatch) -> None:
             self.db = db
 
         def claim_ready(self, now, limit=20):
+            assert limit == 1
             return [job]
 
         def has_active_duplicate(self, dedupe_key, exclude_job_id=None):
