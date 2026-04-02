@@ -86,7 +86,21 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
 
 def _publish_due_jobs(db, now: datetime) -> dict[str, int]:
     job_repo = WireJobRepository(db)
-    publisher = XPublisher()
+    customer_repo = CustomerProfileRepository(db)
+    profile = customer_repo.get_active_autopost_customer()
+    if profile is None:
+        logger.info("No active autopost customer with X tokens; skipping wire publish")
+        return {"posted": 0, "failed": 0}
+
+    def _save_tokens(access_token: str, refresh_token: str) -> None:
+        store = dict(profile.token_store or {})
+        store["x_access_token"] = access_token
+        if refresh_token:
+            store["x_refresh_token"] = refresh_token
+        profile.token_store = store
+        db.flush()
+
+    publisher = XPublisher(token_store=dict(profile.token_store or {}), on_token_refresh=_save_tokens)
     # Only publish one due wire job per cycle so late resume/backlog states
     # do not flush multiple overdue posts at once.
     jobs = job_repo.claim_ready(now=now, limit=1)

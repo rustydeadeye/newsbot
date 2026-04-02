@@ -50,11 +50,21 @@ def test_publish_due_jobs_requeues_runtime_errors_before_fail(monkeypatch) -> No
         def commit(self):
             return None
 
+        def flush(self):
+            return None
+
+    class FakeProfile:
+        token_store = {"x_access_token": "token", "x_refresh_token": "refresh"}
+
     candidate = Candidate()
     job = Job()
 
     monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
-    monkeypatch.setattr("app.wire_feed.runner.XPublisher", lambda: FakePublisher())
+    monkeypatch.setattr(
+        "app.wire_feed.runner.CustomerProfileRepository",
+        lambda db: type("Repo", (), {"get_active_autopost_customer": lambda self: FakeProfile()})(),
+    )
+    monkeypatch.setattr("app.wire_feed.runner.XPublisher", lambda token_store=None, on_token_refresh=None: FakePublisher())
 
     result = _publish_due_jobs(FakeDb(), datetime.now(timezone.utc))
 
@@ -105,17 +115,51 @@ def test_publish_due_jobs_skips_active_duplicate(monkeypatch) -> None:
         def commit(self):
             return None
 
+        def flush(self):
+            return None
+
+    class FakeProfile:
+        token_store = {"x_access_token": "token", "x_refresh_token": "refresh"}
+
     candidate = Candidate()
     job = Job()
 
     monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
-    monkeypatch.setattr("app.wire_feed.runner.XPublisher", lambda: None)
+    monkeypatch.setattr(
+        "app.wire_feed.runner.CustomerProfileRepository",
+        lambda db: type("Repo", (), {"get_active_autopost_customer": lambda self: FakeProfile()})(),
+    )
+    monkeypatch.setattr("app.wire_feed.runner.XPublisher", lambda token_store=None, on_token_refresh=None: None)
 
     result = _publish_due_jobs(FakeDb(), datetime.now(timezone.utc))
 
     assert result == {"posted": 0, "failed": 0}
     assert job.status == "skipped"
     assert job.result_message == "duplicate_active_job"
+
+
+def test_publish_due_jobs_skips_without_active_autopost_customer(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from app.wire_feed.runner import _publish_due_jobs
+
+    class FakeDb:
+        def commit(self):
+            return None
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr(
+        "app.wire_feed.runner.CustomerProfileRepository",
+        lambda db: type("Repo", (), {"get_active_autopost_customer": lambda self: None})(),
+    )
+
+    result = _publish_due_jobs(FakeDb(), datetime.now(timezone.utc))
+
+    assert result == {"posted": 0, "failed": 0}
 
 
 def test_run_wire_cycle_does_not_publish_when_customer_autopost_disabled(monkeypatch) -> None:

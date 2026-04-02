@@ -53,3 +53,11 @@ class CustomerProfileRepository:
         stmt = select(CustomerProfile).where(CustomerProfile.auto_post_enabled.is_(True))
         profiles = list(self.db.scalars(stmt))
         return any(bool((profile.token_store or {}).get("x_access_token")) for profile in profiles)
+
+    def get_active_autopost_customer(self) -> CustomerProfile | None:
+        stmt = select(CustomerProfile).where(CustomerProfile.auto_post_enabled.is_(True))
+        profiles = list(self.db.scalars(stmt))
+        for profile in profiles:
+            if bool((profile.token_store or {}).get("x_access_token")):
+                return profile
+        return None
