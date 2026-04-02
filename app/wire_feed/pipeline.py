@@ -65,6 +65,79 @@ _LOW_SIGNAL_MANAGEMENT_TERMS = (
     "chief strategy officer",
 )
 
+_MARKET_IMPACT_BLOCK_TERMS = (
+    "appeal no.",
+    "appeal filed by",
+    "order for compliance",
+    "recovery officer",
+    "release of attachment",
+    "prohibitory order",
+    "files annual disclosure",
+    "annual disclosure under sebi regulations",
+    "regulation 74(5)",
+    "demat certificate",
+    "non-applicability of lc framework",
+    "not a large corporate",
+    "large corporate disclosure",
+    "insider trading disclosure form",
+    "share transfer notice",
+    "iepf transfer notice",
+    "price movement to bse",
+    "clarifies price movement",
+)
+
+_MARKET_IMPACT_KEEP_TERMS = (
+    "gross advances",
+    "total deposits",
+    "advances up",
+    "deposits up",
+    "business growth",
+    "sales",
+    "volume",
+    "production",
+    "offtake",
+    "pre-sales",
+    "loan growth",
+    "deposits",
+    "advances",
+    "order",
+    "contract",
+    "project",
+    "wins",
+    "approval",
+    "approved",
+    "rbi approval",
+    "stake purchase",
+    "acquires",
+    "acquisition",
+    "milestone",
+    "capacity",
+    "commissioning",
+    "commercial production",
+    "expansion",
+    "tax demand",
+    "gst demand",
+    "penalty",
+    "default",
+    "downgraded",
+    "rating downgraded",
+    "tariff",
+    "crude",
+    "oil",
+    "rupee",
+    "strait of hormuz",
+    "foreign minister",
+    "deputy foreign minister",
+)
+
+_MARKET_FIRST_EVENT_TYPES = {
+    "rbi_policy",
+    "rbi_penalty",
+    "macro_release",
+    "order_win",
+    "default_fraud",
+}
+
 
 @dataclass
 class WirePipelineResult:
@@ -250,11 +323,16 @@ def _should_drop_wire_candidate(facts: dict) -> bool:
     headline = str(facts.get("headline") or "")
     article_text = str(facts.get("article_text") or "")
     combined = f"{headline} {article_text}".lower()
+    wire_facts = facts.get("wire_facts") or {}
+    wire_kind = str(wire_facts.get("kind") or "")
 
     if any(term in combined for term in _LOW_SIGNAL_WIRE_TERMS):
         return True
 
     if event_type == "management_change" and any(term in combined for term in _LOW_SIGNAL_MANAGEMENT_TERMS):
+        return True
+
+    if any(term in combined for term in _MARKET_IMPACT_BLOCK_TERMS):
         return True
 
     if event_type == "general_update" and any(
@@ -274,5 +352,26 @@ def _should_drop_wire_candidate(facts: dict) -> bool:
         )
     ):
         return True
+
+    if event_type in _MARKET_FIRST_EVENT_TYPES:
+        return False
+
+    if wire_kind in {"sales_update", "production_update", "offtake_update", "order_win", "tax_demand", "outlook_update"}:
+        return False
+
+    if event_type == "sebi_enforcement":
+        # Keep only clearly market-relevant enforcement items such as penalties/defaults,
+        # and drop procedural appeal/compliance notices.
+        return not any(term in combined for term in ("penalty", "tax demand", "gst demand", "default", "attachment", "auction"))
+
+    if event_type == "fundraise":
+        # Keep only material capital or ownership actions that look market-relevant.
+        return not any(term in combined for term in ("open offer", "stake", "buy up to", "approval", "issue size", "fund raise", "fundraise"))
+
+    if event_type in {"earnings", "acquisition", "general_update"}:
+        if not any(term in combined for term in _MARKET_IMPACT_KEEP_TERMS):
+            return True
+        if "results filed" in combined or "q4/fy results filed" in combined or "q1 results filed" in combined:
+            return True
 
     return False
