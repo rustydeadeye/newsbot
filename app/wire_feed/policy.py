@@ -10,9 +10,9 @@ from app.wire_feed.pipeline import WirePipelineResult
 @dataclass(frozen=True)
 class WireFeedSettings:
     max_posts_per_hour: int = 2
-    max_posts_per_day: int = 12
+    max_posts_per_day: int = 15
     base_max_posts_per_day: int = 5
-    web_max_posts_per_day: int = 7
+    web_max_posts_per_day: int = 10
     breaking_gap_minutes: int = 10
     high_gap_minutes: int = 45
     normal_gap_minutes: int = 60

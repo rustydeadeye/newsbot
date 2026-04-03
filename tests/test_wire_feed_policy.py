@@ -158,9 +158,9 @@ def test_plan_wire_queue_respects_per_family_daily_caps() -> None:
             dedupe_key=f"macro|web{i}",
             posted_at=now - timedelta(hours=i + 2),
             source_family="web",
-            source_name="openai_web_breaking_midday",
+            source_name="tavily_web_india_close",
         )
-        for i in range(7)
+        for i in range(10)
     ]
 
     candidate = _candidate("One more web", 90, ticker="WEB", source_family="web")

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     wire_feed_interval_sec: int = Field(default=900, alias="WIRE_FEED_INTERVAL_SEC")
     wire_web_breaking_enabled: bool = Field(default=False, alias="WIRE_WEB_BREAKING_ENABLED")
     wire_web_breaking_model: str = Field(default="gpt-5.4-mini", alias="WIRE_WEB_BREAKING_MODEL")
-    wire_web_breaking_limit: int = Field(default=8, alias="WIRE_WEB_BREAKING_LIMIT")
+    wire_web_breaking_limit: int = Field(default=12, alias="WIRE_WEB_BREAKING_LIMIT")
     wire_web_breaking_freshness_hours: int = Field(default=18, alias="WIRE_WEB_BREAKING_FRESHNESS_HOURS")
     auth_admin_emails: str = Field(default="", alias="AUTH_ADMIN_EMAILS")
     auth_auto_provision_users: bool = Field(default=True, alias="AUTH_AUTO_PROVISION_USERS")
