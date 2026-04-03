@@ -161,11 +161,17 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
         candidates.append((candidate, validation))
 
     results: list[WirePipelineResult] = []
-    for candidate, validation in _dedupe_web_candidates(candidates):
+    for candidate, validation in _select_web_candidates(candidates, lane=run.lane):
+        if not _passes_lane_relevance_gate(candidate, lane=run.lane):
+            logger.info("Rejected Tavily candidate for lane mismatch: %s", candidate.title)
+            continue
         try:
             draft_text = _draft_tweet(client, model=settings.wire_web_breaking_model, candidate=candidate)
         except Exception as exc:
             logger.warning("OpenAI web breaking drafting failed for %s: %s", candidate.title, exc)
+            continue
+        if not _passes_public_quality_gate(draft_text):
+            logger.info("Rejected Tavily draft for public-facing quality: %s", candidate.title)
             continue
 
         event_type = _event_type_for_category(candidate.category, candidate.title, candidate.summary)
@@ -474,14 +480,17 @@ def _importance_score(candidate: WebCandidate) -> int:
     return min(score, 96)
 
 
-def _dedupe_web_candidates(
+def _select_web_candidates(
     candidates: list[tuple[WebCandidate, ValidationResult]],
+    *,
+    lane: str,
     max_per_topic: int = 1,
+    max_selected: int = 5,
 ) -> list[tuple[WebCandidate, ValidationResult]]:
     ordered = sorted(
         candidates,
         key=lambda item: (
-            _importance_score(item[0]),
+            _selection_score(item[0], lane=lane),
             item[1].published_at or datetime.min.replace(tzinfo=timezone.utc),
         ),
         reverse=True,
@@ -499,7 +508,144 @@ def _dedupe_web_candidates(
         kept.append((candidate, validation))
         seen_fingerprints.add(fingerprint)
         topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        if len(kept) >= max_selected:
+            break
     return kept
+
+
+def _selection_score(candidate: WebCandidate, *, lane: str) -> int:
+    return _importance_score(candidate) + _lane_fit_bonus(candidate, lane=lane)
+
+
+def _lane_fit_bonus(candidate: WebCandidate, lane: str) -> int:
+    text = " ".join(
+        [
+            candidate.title.lower(),
+            candidate.summary.lower(),
+            candidate.category.lower(),
+            candidate.india_impact.lower(),
+            candidate.why_it_matters.lower(),
+        ]
+    )
+    bonus = 0
+    if lane == "india_preopen":
+        if any(term in text for term in ("gift nifty", "market open", "overnight", "wall street", "rupee", "rbi", "brent", "wti", "yield", "dollar")):
+            bonus += 6
+        if any(term in text for term in ("market close", "uae equities", "spacex ipo")):
+            bonus -= 5
+    elif lane == "india_close":
+        if any(term in text for term in ("sensex", "nifty", "top movers", "market close", "stocks fell", "stocks rose", "rupee", "bond yield", "oil")):
+            bonus += 6
+        if any(term in text for term in ("uae equities", "spacex ipo", "space etf", "echo star", "echostar")):
+            bonus -= 8
+    elif lane == "global_impact":
+        if any(term in text for term in ("oil", "brent", "wti", "fed", "treasury", "yield", "dollar", "shipping", "tariff", "sanction", "hormuz", "rupee")):
+            bonus += 6
+        if any(term in text for term in ("sensex", "nifty close", "egm", "shareholder")):
+            bonus -= 5
+    return bonus
+
+
+def _passes_lane_relevance_gate(candidate: WebCandidate, *, lane: str) -> bool:
+    text = " ".join(
+        [
+            candidate.title.lower(),
+            candidate.summary.lower(),
+            candidate.category.lower(),
+            candidate.india_impact.lower(),
+            candidate.why_it_matters.lower(),
+        ]
+    )
+    if lane == "india_preopen":
+        blocked = (
+            "market close",
+            "uae equities",
+            "tribal casinos",
+            "prediction markets",
+            "spacex ipo",
+            "space etf",
+        )
+        return not any(term in text for term in blocked)
+    if lane == "india_close":
+        if any(
+            term in text
+            for term in (
+                "tribal casinos",
+                "prediction markets",
+                "spacex ipo",
+                "space etf",
+                "echo star",
+                "echostar",
+                "uae equities",
+            )
+        ):
+            return False
+        strong_close_signal = any(
+            term in text
+            for term in (
+                "sensex",
+                "nifty",
+                "market close",
+                "market recap",
+                "top movers",
+                "stocks fell",
+                "stocks rose",
+                "all sectors",
+                "banks led the slide",
+                "rupee",
+                "bond yield",
+                "oil",
+                "manufacturing pmi",
+                "exports",
+                "factory",
+            )
+        )
+        india_context = any(
+            term in text
+            for term in (
+                "india",
+                "indian",
+                "sensex",
+                "nifty",
+                "rupee",
+                "rbi",
+                "bse",
+                "nse",
+            )
+        )
+        return strong_close_signal or india_context
+    if lane == "global_impact":
+        blocked = (
+            "egm",
+            "shareholder",
+            "board meeting",
+            "postal ballot",
+        )
+        return not any(term in text for term in blocked)
+    return True
+
+
+def _passes_public_quality_gate(draft_text: str) -> bool:
+    draft = " ".join(draft_text.split()).strip()
+    if len(draft) < 90 or len(draft) > 260:
+        return False
+    lowered = draft.lower()
+    blocked_terms = (
+        "risk assets",
+        "positioning",
+        "treasury books",
+        "watchlist",
+        "enters watchlist",
+        "the bet is",
+        "this could",
+        "signals",
+        "reprices",
+    )
+    if any(term in lowered for term in blocked_terms):
+        return False
+    if lowered.count(";") > 1 or draft.count("||") > 1:
+        return False
+    return True
 
 
 def _event_type_for_category(category: str, title: str, summary: str) -> str:
