@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -41,7 +43,7 @@ RELIABLE_DOMAIN_KEYWORDS = tuple(domain.replace("www.", "") for domain in REPUTA
 class WebRunDef:
     key: str
     source_name: str
-    run_window: str
+    lane: str
     local_hour: int
     local_minute: int = 0
 
@@ -67,23 +69,23 @@ class ValidationResult:
 
 WEB_RUNS: tuple[WebRunDef, ...] = (
     WebRunDef(
-        key="preopen",
-        source_name="openai_web_breaking_preopen",
-        run_window="preopen",
+        key="india_preopen",
+        source_name="tavily_web_india_preopen",
+        lane="india_preopen",
         local_hour=7,
         local_minute=15,
     ),
     WebRunDef(
-        key="midday",
-        source_name="openai_web_breaking_midday",
-        run_window="general",
-        local_hour=13,
-        local_minute=0,
+        key="india_close",
+        source_name="tavily_web_india_close",
+        lane="india_close",
+        local_hour=15,
+        local_minute=45,
     ),
     WebRunDef(
-        key="night",
-        source_name="openai_web_breaking_night",
-        run_window="night",
+        key="global_impact",
+        source_name="tavily_web_global_impact",
+        lane="global_impact",
         local_hour=21,
         local_minute=15,
     ),
@@ -107,24 +109,20 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
     settings = get_settings()
     if not settings.wire_web_breaking_enabled:
         return []
-    if OpenAI is None or not settings.openai_api_key:
-        logger.info("OpenAI web breaking pipeline skipped: client unavailable or key missing")
+    if OpenAI is None or not settings.openai_api_key or not settings.tavily_api_key:
+        logger.info("Tavily web breaking pipeline skipped: client or key missing")
         return []
 
     client = OpenAI(api_key=settings.openai_api_key)
     try:
-        payload = _response_json(
-            client,
-            model=settings.wire_web_breaking_model,
-            prompt=_build_research_prompt(
-                limit=settings.wire_web_breaking_limit,
-                hours=settings.wire_web_breaking_freshness_hours,
-                run_window=run.run_window,
-            ),
-            allow_domains=REPUTABLE_DOMAINS,
+        raw_items = _tavily_lane_results(
+            lane=run.lane,
+            tavily_api_key=settings.tavily_api_key,
+            limit=settings.wire_web_breaking_limit,
+            hours=settings.wire_web_breaking_freshness_hours,
         )
     except Exception as exc:
-        logger.warning("OpenAI web breaking research failed for %s: %s", run.key, exc)
+        logger.warning("Tavily web breaking research failed for %s: %s", run.key, exc)
         return [
             WirePipelineResult(
                 external_id=f"{run.source_name}:fetch_error",
@@ -141,13 +139,11 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
                 review_reason="fetch_error",
                 draft_text="",
                 safety_flags={"fetch_error": True},
-                raw_payload={"source_family": "web", "run_window": run.run_window},
+                raw_payload={"source_family": "web", "lane": run.lane},
                 published_at=None,
                 fetch_error=f"{type(exc).__name__}: {exc}",
             )
         ]
-
-    raw_items = payload.get("items") or []
     seen_keys: set[str] = set()
     candidates: list[tuple[WebCandidate, ValidationResult]] = []
     for raw in raw_items:
@@ -166,7 +162,6 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
 
     results: list[WirePipelineResult] = []
     for candidate, validation in _dedupe_web_candidates(candidates):
-
         try:
             draft_text = _draft_tweet(client, model=settings.wire_web_breaking_model, candidate=candidate)
         except Exception as exc:
@@ -195,7 +190,7 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
                 safety_flags={"openai_web_breaking": True},
                 raw_payload={
                     "source_family": "web",
-                    "run_window": run.run_window,
+                    "lane": run.lane,
                     "source_url": candidate.source_url,
                     "article_source_name": candidate.source_name,
                     "category": candidate.category,
@@ -210,114 +205,145 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
     return [_noop_result(run, reason="no_approved_candidates")]
 
 
-def _build_research_prompt(limit: int, hours: int, run_window: str) -> str:
-    now_ist = datetime.now(timezone.utc).astimezone(DISPLAY_TZ)
-    if run_window == "preopen":
-        focus = (
-            "Focus on overnight developments that matter for India market open: US markets, oil, dollar, rates, "
-            "geopolitics, RBI/SEBI/government actions, banks, and major India company updates."
+def _tavily_lane_results(*, lane: str, tavily_api_key: str, limit: int, hours: int) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for query in _lane_queries(lane):
+        payload = _tavily_search(
+            query=query,
+            tavily_api_key=tavily_api_key,
+            max_results=max(6, limit),
+            days=max(2, hours // 24 + 1),
+            domains=_lane_domains(lane),
         )
-    elif run_window == "night":
-        focus = (
-            "Focus on post-market India developments and global developments that could matter for the next India session: "
-            "policy, macro, geopolitics, banks, commodities, and major company updates."
-        )
-    else:
-        focus = (
-            "Focus on India-relevant finance and market-moving developments: Indian finance news, geopolitics affecting India, "
-            "and US market developments only when they matter for Indian markets."
-        )
-
-    return f"""
-Find up to {limit} finance/market news items from the last {hours} hours.
-
-Current IST time: {now_ist.strftime('%Y-%m-%d %H:%M IST')}
-Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
-
-{focus}
-
-Rules:
-- Prefer developments that a finance-market audience in India would care about.
-- Prefer items published today when available; otherwise choose only the freshest items within the allowed window.
-- If multiple articles describe the same event, return only the most recent one.
-- Exclude backgrounders, explainers, or older follow-ups if a fresher event update exists.
-- If freshness is unclear or the article appears older than the allowed window, do not include it.
-- Include a mix of banking, macro, geopolitics with market impact, regulation/policy, and major company updates.
-- Exclude low-signal items like routine compliance notices, minor management changes, tiny procedural updates, appeals filed by individuals, and clerical filings.
-- Prefer reputable sources and official sources.
-- Return only valid JSON with this shape:
-{{
-  "items": [
-    {{
-      "title": "short title",
-      "summary": "1-2 sentence factual summary",
-      "source_name": "Reuters / RBI / CNBC TV18 / ...",
-      "source_url": "https://...",
-      "published_at": "ISO-8601 timestamp if available, otherwise empty string",
-      "category": "banking_metrics | macro_market | geopolitics | policy_regulation | company_update | commodity | rates_fx",
-      "india_impact": "one short sentence on why it matters to India/Indian markets",
-      "why_it_matters": "one short sentence on why the item is market-moving"
-    }}
-  ]
-}}
-""".strip()
+        for item in payload.get("results") or []:
+            url = str(item.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            if _is_obvious_junk(item):
+                continue
+            seen_urls.add(url)
+            merged.append(item)
+    ordered = sorted(merged, key=_tavily_sort_key, reverse=True)
+    return ordered[: max(limit * 2, limit)]
 
 
-def _response_json(client: OpenAI, *, model: str, prompt: str, allow_domains: list[str]) -> dict[str, Any]:
-    response = client.responses.create(
-        model=model,
-        input=prompt,
-        tools=[
-            {
-                "type": "web_search",
-                "filters": {"allowed_domains": allow_domains},
-                "search_context_size": "high",
-                "user_location": {
-                    "type": "approximate",
-                    "country": "IN",
-                    "region": "Maharashtra",
-                    "city": "Mumbai",
-                    "timezone": "Asia/Kolkata",
-                },
-            }
-        ],
-        include=["web_search_call.action.sources"],
-        text={"format": {"type": "text"}, "verbosity": "low"},
-        max_output_tokens=4000,
+def _tavily_search(*, query: str, tavily_api_key: str, max_results: int, days: int, domains: list[str]) -> dict[str, Any]:
+    payload = {
+        "query": query,
+        "topic": "news",
+        "search_depth": "advanced",
+        "max_results": max_results,
+        "include_raw_content": False,
+        "include_answer": False,
+        "include_images": False,
+        "days": days,
+        "include_domains": domains,
+    }
+    req = urllib.request.Request(
+        "https://api.tavily.com/search",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {tavily_api_key}",
+        },
+        method="POST",
     )
-    return _parse_json_text(response.output_text)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode())
 
 
-def _parse_json_text(value: str) -> dict[str, Any]:
-    raw = value.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.lower().startswith("json"):
-            raw = raw[4:].strip()
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
-        raw = raw[start : end + 1]
-    return json.loads(raw)
+def _lane_queries(lane: str) -> list[str]:
+    if lane == "india_preopen":
+        return [
+            "India markets pre-open today GIFT Nifty rupee RBI latest news",
+            "India pre-open crude oil yields dollar overnight Wall Street latest",
+            "India market moving company news today pre-open",
+            "RBI rupee latest India markets today",
+        ]
+    if lane == "india_close":
+        return [
+            "India market close today Sensex Nifty closing summary latest",
+            "India top movers today rupee yields oil market close latest",
+            "India closing sector performance today latest",
+            "India market recap today biggest stories latest",
+        ]
+    return [
+        "global news today affecting Indian markets oil dollar yields latest",
+        "geopolitics oil shipping tariffs sanctions latest market impact India",
+        "Fed Treasury yields dollar latest world market news India impact",
+        "major world economic news today relevant for India markets",
+    ]
+
+
+def _lane_domains(lane: str) -> list[str]:
+    if lane == "global_impact":
+        return [
+            "reuters.com",
+            "apnews.com",
+            "cnbc.com",
+            "bloomberg.com",
+            "wsj.com",
+            "ft.com",
+            "business-standard.com",
+            "livemint.com",
+        ]
+    return [
+        "business-standard.com",
+        "economictimes.indiatimes.com",
+        "moneycontrol.com",
+        "livemint.com",
+        "reuters.com",
+        "nseindia.com",
+        "bseindia.com",
+        "rbi.org.in",
+        "sebi.gov.in",
+        "apnews.com",
+    ]
+
+
+def _tavily_sort_key(item: dict[str, Any]) -> tuple[datetime, float]:
+    published_at = _parse_published_at(str(item.get("published_date") or item.get("published_at") or ""))
+    return (published_at or datetime.min.replace(tzinfo=timezone.utc), float(item.get("score") or 0))
+
+
+def _is_obvious_junk(item: dict[str, Any]) -> bool:
+    text = " ".join(
+        [
+            str(item.get("title") or ""),
+            str(item.get("content") or ""),
+            str(item.get("url") or ""),
+        ]
+    ).lower()
+    blocked_terms = (
+        "horoscope",
+        "astrology",
+        "sports",
+        "entertainment",
+        "lifestyle",
+        "celebrity",
+        "weather",
+        "recipe",
+    )
+    return any(term in text for term in blocked_terms)
 
 
 def _draft_tweet(client: OpenAI, *, model: str, candidate: WebCandidate) -> str:
     prompt = f"""
-Write one factual finance-market X post in a dense wire style.
+Write one factual finance-market X post in a dense but human-written style.
 
 Rules:
 - No hashtags
 - No emojis
 - No source attribution in the tweet body
 - Prefer 120-220 characters when supported by the facts
-- Use company/entity first when appropriate
+- Use simple, public-friendly finance language
+- Explain why it matters in plain English
 - Include a second fact, comparison, or market consequence whenever supported by the facts
-- Prefer compressed wire syntax like:
-  - `ENTITY: FACT 1; FACT 2`
-  - `ENTITY: FACT 1 || FACT 2`
-  - `MARKETS: MOVE; CONSEQUENCE`
+- Sound like a sharp human market commentator, not a robotic wire bot
 - If there is a strong number, put it early
 - If there is a strong market implication, include it in the second clause
+- Avoid unexplained jargon unless it is very common
 - Do not sound like a generic news summary
 - Do not invent facts
 
@@ -341,18 +367,24 @@ Return only the tweet text.
 
 def _parse_candidate(item: dict[str, Any]) -> WebCandidate | None:
     title = str(item.get("title") or "").strip()
-    source_url = str(item.get("source_url") or "").strip()
+    source_url = str(item.get("source_url") or item.get("url") or "").strip()
     if not title or not source_url:
         return None
+    summary = str(item.get("summary") or item.get("content") or "").strip()
+    source_name = str(item.get("source_name") or _source_name_from_url(source_url)).strip()
+    published_at = str(item.get("published_at") or item.get("published_date") or "").strip()
+    category = str(item.get("category") or _infer_category(title, summary, source_url)).strip()
+    india_impact = str(item.get("india_impact") or _infer_india_impact(title, summary, category)).strip()
+    why_it_matters = str(item.get("why_it_matters") or _infer_why_it_matters(title, summary, category)).strip()
     return WebCandidate(
         title=title,
-        summary=str(item.get("summary") or "").strip(),
-        source_name=str(item.get("source_name") or "").strip(),
+        summary=summary,
+        source_name=source_name,
         source_url=source_url,
-        published_at=str(item.get("published_at") or "").strip(),
-        category=str(item.get("category") or "").strip(),
-        india_impact=str(item.get("india_impact") or "").strip(),
-        why_it_matters=str(item.get("why_it_matters") or "").strip(),
+        published_at=published_at,
+        category=category,
+        india_impact=india_impact,
+        why_it_matters=why_it_matters,
     )
 
 
@@ -369,9 +401,7 @@ def _parse_published_at(value: str) -> datetime | None:
 def _validate_candidate(candidate: WebCandidate, *, hours: int) -> ValidationResult:
     reasons: list[str] = []
     parsed_time = _parse_published_at(candidate.published_at)
-    if parsed_time is None:
-        reasons.append("missing_or_invalid_time")
-    else:
+    if parsed_time is not None:
         age = datetime.now(timezone.utc) - parsed_time.astimezone(timezone.utc)
         if age > timedelta(hours=hours):
             reasons.append(f"stale_{int(age.total_seconds() // 3600)}h")
@@ -408,9 +438,16 @@ def _validate_candidate(candidate: WebCandidate, *, hours: int) -> ValidationRes
             "equity",
             "stock",
             "borrower",
+            "gift nifty",
+            "sensex",
+            "nifty",
+            "yield",
+            "fed",
         )
     ):
         reasons.append("weak_india_relevance")
+    if any(term in text for term in ("horoscope", "astrology", "celebrity", "recipe", "cricket", "football")):
+        reasons.append("junk_topic")
 
     return ValidationResult(approved=not reasons, reasons=reasons, published_at=parsed_time)
 
@@ -476,6 +513,62 @@ def _event_type_for_category(category: str, title: str, summary: str) -> str:
     return "macro_release"
 
 
+def _infer_category(title: str, summary: str, source_url: str) -> str:
+    text = f"{title} {summary} {source_url}".lower()
+    if any(term in text for term in ("rbi", "sebi", "regulator", "buyback", "policy", "approval", "nse", "bse")):
+        return "policy_regulation"
+    if any(term in text for term in ("rupee", "fx", "dollar", "yield", "bond", "repo", "rate")):
+        return "rates_fx"
+    if any(term in text for term in ("oil", "crude", "brent", "shipping", "iran", "hormuz", "tariff", "sanction")):
+        return "geopolitics"
+    if any(term in text for term in ("sensex", "nifty", "wall street", "stocks", "equities", "market close", "market open")):
+        return "macro_market"
+    if any(term in text for term in ("deposit", "advance", "loan growth", "credit growth", "bank")):
+        return "banking_metrics"
+    return "company_update"
+
+
+def _infer_india_impact(title: str, summary: str, category: str) -> str:
+    text = f"{title} {summary}".lower()
+    if category == "rates_fx":
+        return "This can quickly affect the rupee, importer costs, bank treasury books and market sentiment in India."
+    if category == "policy_regulation":
+        return "This can change expectations for Indian markets, regulation-sensitive stocks and investor positioning."
+    if category == "geopolitics":
+        return "This matters for India through oil, inflation, the rupee, trade costs and overall market risk appetite."
+    if category == "banking_metrics":
+        return "This matters for Indian lenders, borrowers and investors tracking credit growth and deposit trends."
+    if "sensex" in text or "nifty" in text or "wall street" in text:
+        return "This can shape risk appetite, sector moves and expectations for Indian equities."
+    return "This may matter to Indian markets if it changes sentiment, costs, regulation or company outlook."
+
+
+def _infer_why_it_matters(title: str, summary: str, category: str) -> str:
+    text = f"{title} {summary}".lower()
+    if category == "rates_fx":
+        return "Currency and rate moves often spill into banks, oil, IT, inflation expectations and foreign flows."
+    if category == "policy_regulation":
+        return "Policy and regulatory changes can quickly reprice market expectations and sector sentiment."
+    if category == "geopolitics":
+        return "Global shocks can feed into oil prices, inflation risks and market volatility for India."
+    if category == "banking_metrics":
+        return "Banking trends help explain how credit demand, liquidity and financial conditions are changing."
+    if any(term in text for term in ("sensex", "nifty", "wall street")):
+        return "Index moves help frame where risk appetite and sector leadership are heading."
+    return "This is useful if it changes the market narrative or affects how investors read the next session."
+
+
+def _source_name_from_url(url: str) -> str:
+    hostname = urllib.parse.urlparse(url).hostname or ""
+    hostname = hostname.removeprefix("www.")
+    if not hostname:
+        return ""
+    parts = hostname.split(".")
+    if len(parts) >= 2:
+        return parts[-2].replace("-", " ").title()
+    return hostname.title()
+
+
 def _external_id(source_name: str, candidate: WebCandidate) -> str:
     return f"{source_name}:{_slug(candidate.source_url or candidate.title)}"
 
@@ -538,7 +631,7 @@ def _noop_result(run: WebRunDef, *, reason: str) -> WirePipelineResult:
         review_reason=reason,
         draft_text="",
         safety_flags={reason: True},
-        raw_payload={"source_family": "web", "run_window": run.run_window},
+        raw_payload={"source_family": "web", "lane": run.lane},
         published_at=None,
         fetch_error=reason,
     )

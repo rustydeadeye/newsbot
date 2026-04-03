@@ -4,17 +4,17 @@ from app.wire_feed.web_pipeline import WebCandidate, ValidationResult, _dedupe_w
 
 
 def test_get_due_web_runs_returns_windows_not_yet_executed() -> None:
-    now = datetime(2026, 4, 2, 8, 0, tzinfo=timezone.utc)  # 13:30 IST
+    now = datetime(2026, 4, 2, 11, 0, tzinfo=timezone.utc)  # 16:30 IST
     seen_since: list[tuple[str, datetime]] = []
 
     def has_run_since(source_name: str, since: datetime) -> bool:
         seen_since.append((source_name, since))
-        return source_name == "openai_web_breaking_preopen"
+        return source_name == "tavily_web_india_preopen"
 
     due = get_due_web_runs(now, has_run_since)
 
-    assert [run.key for run in due] == ["midday"]
-    assert seen_since[0][0] == "openai_web_breaking_preopen"
+    assert [run.key for run in due] == ["india_close"]
+    assert seen_since[0][0] == "tavily_web_india_preopen"
 
 
 def test_get_due_web_runs_waits_until_configured_minute() -> None:

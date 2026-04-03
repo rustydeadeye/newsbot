@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     supabase_publishable_key: str | None = Field(default=None, alias="SUPABASE_PUBLISHABLE_KEY")
     supabase_jwt_secret: str | None = Field(default=None, alias="SUPABASE_JWT_SECRET")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     x_api_base_url: str = Field(default="https://api.x.com/2", alias="X_API_BASE_URL")
     x_client_id: str | None = Field(default=None, alias="X_CLIENT_ID")
