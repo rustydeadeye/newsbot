@@ -29,6 +29,7 @@ class WireCandidateRepository:
                 confidence_score=result.confidence_score,
                 draft_text=result.draft_text,
                 raw_payload={
+                    **(result.raw_payload or {}),
                     "subject_key": result.subject_key,
                     "safety_flags": result.safety_flags,
                 },
@@ -47,6 +48,7 @@ class WireCandidateRepository:
         candidate.draft_text = result.draft_text
         candidate.raw_payload = {
             **(candidate.raw_payload or {}),
+            **(result.raw_payload or {}),
             "subject_key": result.subject_key,
             "safety_flags": result.safety_flags,
         }
@@ -56,6 +58,15 @@ class WireCandidateRepository:
     def get_by_external_id(self, external_id: str) -> WireCandidate | None:
         stmt = select(WireCandidate).where(WireCandidate.external_id == external_id).limit(1)
         return self.db.scalar(stmt)
+
+    def has_source_candidate_since(self, source_name: str, since: datetime) -> bool:
+        stmt = (
+            select(func.count())
+            .select_from(WireCandidate)
+            .where(WireCandidate.source_name == source_name, WireCandidate.created_at >= since)
+        )
+        count = self.db.scalar(stmt)
+        return bool(count)
 
 
 class WireJobRepository:
@@ -176,6 +187,8 @@ class WireJobRepository:
                 priority=job.priority,
                 status=job.status,
                 job_id=job.id,
+                source_family=str((candidate.raw_payload or {}).get("source_family") or "base"),
+                source_name=candidate.source_name,
             )
             for candidate, job in rows
         ]

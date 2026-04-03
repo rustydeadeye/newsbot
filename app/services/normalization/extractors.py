@@ -287,31 +287,65 @@ def _extract_wire_facts(
         return facts
 
     tax_match = re.search(
-        r"gst\s+demand(?:\s+order)?(?:\s+(?:worth|of))?\s+(?P<value>(?:₹|rs\.?\s*)?[\d.,]+\s*crore)",
+        r"(?:gst|income tax|tax)\s+demand(?:\s+order)?(?:\s+(?:worth|of))?\s+(?P<value>(?:₹|rs\.?\s*)?[\d.,]+\s*(?:crore|cr))",
         context,
         re.IGNORECASE,
     )
+    if not tax_match:
+        reduction_match = re.search(
+            r"(?:(?:tax|income tax|gst).+?(?:cut|reduced)\s+from|reducing demand from)\s+(?P<previous>(?:₹|rs\.?\s*)?[\d.,]+\s*(?:crore|cr))\s+to\s+(?P<current>(?:₹|rs\.?\s*)?[\d.,]+\s*(?:crore|cr))",
+            context,
+            re.IGNORECASE,
+        )
+        if reduction_match:
+            tax_match = reduction_match
     if tax_match:
-        return {
+        facts = {
             "kind": "tax_demand",
             "subject_label": subject_label,
-            "amount_value": _normalize_money_like(tax_match.group("value")),
-            "metric_label": "GST DEMAND ORDER",
+            "amount_value": _normalize_money_like(tax_match.groupdict().get("value") or tax_match.groupdict().get("current") or ""),
+            "metric_label": "TAX DEMAND",
         }
+        prev_match = re.search(
+            r"(?:(?:cut|reduced)\s+from|reducing demand from)\s+(?P<previous>(?:₹|rs\.?\s*)?[\d.,]+\s*(?:crore|cr))\s+to\s+(?P<current>(?:₹|rs\.?\s*)?[\d.,]+\s*(?:crore|cr))",
+            context,
+            re.IGNORECASE,
+        )
+        if prev_match:
+            facts["amount_value"] = _normalize_money_like(prev_match.group("current"))
+            facts["previous_amount"] = _normalize_money_like(prev_match.group("previous"))
+            facts["metric_label"] = "TAX DEMAND"
+        if "plans to appeal" in context.lower() or "plan to appeal" in context.lower():
+            facts["extra_clause"] = "CO TO APPEAL"
+        return facts
 
     order_match = re.search(
         r"(?:wins?|secured?|receives?)\s+(?P<value>₹?[\d.,]+\s*cr)\s+(?P<body>.+?)\s+(?P<kind>order|contract|project)",
         context,
         re.IGNORECASE,
     )
+    if not order_match:
+        order_match = re.search(
+            r"(?:wins?|secured?|receives?).+?(?P<kind>order|contract|project)\s+worth\s+(?P<value>₹?[\d.,]+\s*(?:cr|crore))\s+(?:for\s+)?(?P<body>.+?)(?:,|\.|$)",
+            context,
+            re.IGNORECASE,
+        )
     if order_match:
-        return {
+        facts = {
             "kind": "order_win",
             "subject_label": subject_label,
             "amount_value": _normalize_money_like(order_match.group("value")),
             "counterparty_or_body": order_match.group("body").upper().strip(" -,."),
             "metric_label": order_match.group("kind").upper(),
         }
+        delivery_match = re.search(
+            r"delivery scheduled by\s+(?P<date>[A-Za-z]+\s+\d{1,2},\s+\d{4})",
+            context,
+            re.IGNORECASE,
+        )
+        if delivery_match:
+            facts["extra_clause"] = f"DELIVERY BY {delivery_match.group('date').upper()}"
+        return facts
 
     if event_type not in {"earnings", "order_win", "default_fraud"}:
         return None

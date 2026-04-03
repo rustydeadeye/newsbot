@@ -11,6 +11,8 @@ from app.wire_feed.pipeline import WirePipelineResult
 class WireFeedSettings:
     max_posts_per_hour: int = 2
     max_posts_per_day: int = 12
+    base_max_posts_per_day: int = 5
+    web_max_posts_per_day: int = 7
     breaking_gap_minutes: int = 10
     high_gap_minutes: int = 45
     normal_gap_minutes: int = 60
@@ -29,6 +31,8 @@ class WirePostRecord:
     priority: str = "normal"
     status: str = "posted"
     job_id: int | None = None
+    source_family: str = "base"
+    source_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,12 +54,34 @@ def plan_wire_queue(
     now = now or datetime.now(timezone.utc)
     recent_posts = list(recent_posts or [])
 
-    ordered = sorted(candidates, key=lambda item: (item.importance_score, item.published_at or now), reverse=True)
+    ordered = sorted(candidates, key=lambda item: _candidate_order_key(item, now), reverse=True)
     decisions: list[WireQueueDecision] = []
     planned_posts: list[WirePostRecord] = list(recent_posts)
     last_scheduled = max((record.posted_at for record in planned_posts), default=None)
 
     for candidate in ordered:
+        if candidate.fetch_error:
+            decisions.append(
+                WireQueueDecision(
+                    result=candidate,
+                    action="skip",
+                    priority="normal",
+                    reason="fetch_error",
+                )
+            )
+            continue
+
+        if not candidate.draft_text.strip():
+            decisions.append(
+                WireQueueDecision(
+                    result=candidate,
+                    action="skip",
+                    priority="normal",
+                    reason="empty_draft",
+                )
+            )
+            continue
+
         dedupe_key = _wire_dedupe_key(candidate)
         priority = _priority_bucket(candidate)
 
@@ -75,17 +101,37 @@ def plan_wire_queue(
             decisions.append(WireQueueDecision(result=candidate, action="skip", priority=priority, reason="daily_limit"))
             continue
 
+        if _count_since_family(planned_posts, candidate.source_family, now - timedelta(days=1)) >= _family_daily_limit(candidate.source_family, settings):
+            decisions.append(
+                WireQueueDecision(
+                    result=candidate,
+                    action="skip",
+                    priority=priority,
+                    reason=f"{candidate.source_family}_daily_limit",
+                )
+            )
+            continue
+
         gap_minutes = _gap_minutes(priority, settings)
         if priority == "breaking":
             last_breaking = max((record.posted_at for record in planned_posts if record.priority == "breaking"), default=None)
             earliest = now if last_breaking is None else max(now, last_breaking + timedelta(minutes=gap_minutes))
         else:
             earliest = now if last_scheduled is None else max(now, last_scheduled + timedelta(minutes=gap_minutes))
-        if _uses_quiet_hours(priority) and _in_quiet_hours(earliest, settings):
+        if _uses_quiet_hours(candidate, priority) and _in_quiet_hours(earliest, settings):
             earliest = _next_quiet_end(earliest, settings)
         action = "post_now" if earliest <= now else "queue"
         decisions.append(WireQueueDecision(result=candidate, action=action, priority=priority, scheduled_for=earliest))
-        planned_posts.append(WirePostRecord(dedupe_key=dedupe_key, posted_at=earliest, priority=priority, status="queued"))
+        planned_posts.append(
+            WirePostRecord(
+                dedupe_key=dedupe_key,
+                posted_at=earliest,
+                priority=priority,
+                status="queued",
+                source_family=candidate.source_family,
+                source_name=candidate.source_name,
+            )
+        )
         last_scheduled = earliest
 
     return decisions
@@ -107,7 +153,23 @@ def _gap_minutes(priority: str, settings: WireFeedSettings) -> int:
     return settings.normal_gap_minutes
 
 
-def _uses_quiet_hours(priority: str) -> bool:
+def _candidate_order_key(candidate: WirePipelineResult, now: datetime) -> tuple[int, int, datetime]:
+    return (
+        candidate.importance_score + _family_priority_bonus(candidate.source_family),
+        _family_priority_bonus(candidate.source_family),
+        candidate.published_at or now,
+    )
+
+
+def _family_priority_bonus(source_family: str) -> int:
+    if source_family == "web":
+        return 8
+    return 0
+
+
+def _uses_quiet_hours(candidate: WirePipelineResult, priority: str) -> bool:
+    if candidate.source_family == "web":
+        return False
     return priority != "breaking"
 
 
@@ -147,6 +209,16 @@ def _is_duplicate_recent(
 
 def _count_since(records: list[WirePostRecord], cutoff: datetime) -> int:
     return sum(1 for record in records if record.posted_at >= cutoff)
+
+
+def _count_since_family(records: list[WirePostRecord], source_family: str, cutoff: datetime) -> int:
+    return sum(1 for record in records if record.posted_at >= cutoff and record.source_family == source_family)
+
+
+def _family_daily_limit(source_family: str, settings: WireFeedSettings) -> int:
+    if source_family == "web":
+        return settings.web_max_posts_per_day
+    return settings.base_max_posts_per_day
 
 
 def _wire_dedupe_key(candidate: WirePipelineResult) -> str:

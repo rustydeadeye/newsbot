@@ -185,11 +185,20 @@ class DraftingService:
 
     def _macro_template(self, facts: dict) -> str | None:
         headline = self._clean_headline(facts)
+        context = self._wire_context_text(facts)
         source_name = self._display_source_name(facts)
         if not headline:
             return None
 
         lowered = headline.lower()
+        bank_metrics = self._bank_metrics_wire_text(context, facts)
+        if bank_metrics:
+            return self._with_optional_source(bank_metrics, facts, source_override=source_name)
+
+        market_metrics = self._market_metrics_wire_text(context, facts)
+        if market_metrics:
+            return self._with_optional_source(market_metrics, facts, source_override=source_name)
+
         if source_name == "RBI":
             if "auction" in lowered and "result" in lowered:
                 body = self._headline_rewrite(headline, [(r"(?i)^result of ", ""), (r"(?i)^RBI ", "RBI ")])
@@ -309,6 +318,14 @@ class DraftingService:
         if order_text:
             return order_text
 
+        approval_text = self._approval_wire_text(headline, context, company)
+        if approval_text:
+            return approval_text
+
+        stake_text = self._stake_wire_text(headline, context, company)
+        if stake_text:
+            return stake_text
+
         fundraise_text = self._fundraise_wire_text(headline, context, company)
         if fundraise_text:
             return fundraise_text
@@ -384,15 +401,26 @@ class DraftingService:
             body = str(wire_facts.get("counterparty_or_body") or "").strip()
             metric = str(wire_facts.get("metric_label") or "ORDER").strip()
             if amount and body:
-                return f"{subject}: WINS {body} {metric} WORTH {amount}"
+                extra = str(wire_facts.get("extra_clause") or "").strip()
+                text = f"{subject}: WINS {body} {metric} WORTH {amount}"
+                if extra:
+                    text += f" || {extra}"
+                return text
             if amount:
                 return f"{subject}: {metric} WORTH {amount}"
 
         if kind == "tax_demand":
             amount = str(wire_facts.get("amount_value") or "").strip()
             metric = str(wire_facts.get("metric_label") or "GST DEMAND ORDER").strip()
+            previous = str(wire_facts.get("previous_amount") or "").strip()
+            extra = str(wire_facts.get("extra_clause") or "").strip()
             if amount:
-                return f"{subject}: {metric} OF {amount}"
+                text = f"{subject}: {metric} OF {amount}"
+                if previous:
+                    text += f" VS PREV {previous}"
+                if extra:
+                    text += f" || {extra}"
+                return text
 
         return None
 
@@ -609,6 +637,41 @@ class DraftingService:
             return f"{company}: WINS {body} CONTRACT"
         return None
 
+    def _approval_wire_text(self, headline: str, context: str, company: str) -> str | None:
+        match = re.search(
+            r"consent to operate for\s+(?P<body>[\d.,]+\s*mw\s+.+?plant).*?trial operations starting\s+(?P<date>[A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+\d{4})",
+            context,
+            re.IGNORECASE,
+        )
+        if match:
+            body = match.group("body").upper().strip(" -,.")
+            date = re.sub(r"(?i)(\d)(st|nd|rd|th)\b", r"\1", match.group("date").upper())
+            return f"{company}: CONSENT TO OPERATE FOR {body} || TRIAL OPS START {date}"
+
+        headline_match = re.match(
+            r"^(?P<name>.+?)\s+gets\s+(?P<body>[\d.,]+\s*MW\s+.+?)\s+approval$",
+            headline,
+            re.IGNORECASE,
+        )
+        if headline_match:
+            return f"{company}: APPROVAL FOR {headline_match.group('body').upper()}"
+        return None
+
+    def _stake_wire_text(self, headline: str, context: str, company: str) -> str | None:
+        match = re.search(
+            r"deposits\s+(?P<deposit>₹?[\d.,]+\s*(?:crore|cr)).+?for\s+.+?\s+in\s+(?P<target>.+?)\s+at\s+₹?[\d.,]+\s+per warrant,?\s+totaling\s+(?P<total>₹?[\d.,]+\s*(?:crore|cr))\s+investment",
+            context,
+            re.IGNORECASE,
+        )
+        if match:
+            actor_match = re.match(r"^(?P<actor>.+?)\s+deposits\s+", headline, re.IGNORECASE)
+            deposit = self._normalize_money(match.group("deposit"))
+            total = self._normalize_money(match.group("total"))
+            target = match.group("target").upper().strip(" -,.")
+            actor = actor_match.group("actor").upper().strip() if actor_match else company
+            return f"{actor}: DEPOSITS {deposit} FOR {target} STAKE || TOTAL INVESTMENT {total}"
+        return None
+
     def _fundraise_wire_text(self, headline: str, context: str, company: str) -> str | None:
         match = re.match(
             r"^(?P<name>.+?)\s+rights issue opens (?P<date>.+)$",
@@ -637,6 +700,9 @@ class DraftingService:
         match = re.search(r"domestic sales(?:\s+(?:at|of))?\s*([\d,]+)\s+units?", context, re.IGNORECASE)
         if match and "total sales" in context.lower():
             return f"DOMESTIC SALES {match.group(1)} UNITS"
+        store_match = re.search(r"adds?\s+(\d+)\s+stores?", context, re.IGNORECASE)
+        if store_match:
+            return f"ADDS {store_match.group(1)} STORES"
         return None
 
     def _guidance_extra_clause(self, context: str) -> str | None:
@@ -649,6 +715,159 @@ class DraftingService:
         match = re.search(r"ebitda\s+(?:boost|up|rise|rises|surges)\s+(?:of\s+|at\s+)?(~?\s*₹?[\d.,]+\s*(?:crore|cr))", context, re.IGNORECASE)
         if match:
             return f"EBITDA {self._normalize_money(match.group(1))}"
+        return None
+
+    def _bank_metrics_wire_text(self, context: str, facts: dict) -> str | None:
+        subject = self._company_wire_label(facts) or "BANKING"
+        value_pattern = r"[\d.,]+\s*(?:(?:t|tn|trillion|b|bn|billion|crore|cr)(?:\s+rupees)?|rupees)"
+        advances = re.search(
+            rf"(?:bank\s+)?gross advances(?:\s+seen)?\s+at\s+(?P<current>{value_pattern})\s+vs\s+(?P<prior>{value_pattern})(?:\s*\((?P<comp>yoy)\))?",
+            context,
+            re.IGNORECASE,
+        )
+        deposits = re.search(
+            rf"(?:bank\s+)?total deposits(?:\s+seen)?\s+at\s+(?P<current>{value_pattern})\s+vs\s+(?P<prior>{value_pattern})(?:\s*\((?P<comp>yoy)\))?",
+            context,
+            re.IGNORECASE,
+        )
+        business = re.search(
+            r"(?P<pct>[\d.]+%)\s+growth in total business",
+            context,
+            re.IGNORECASE,
+        )
+        deposit_growth = re.search(
+            r"(?P<pct>[\d.]+%)\s+growth in deposits",
+            context,
+            re.IGNORECASE,
+        )
+        deposit_level = re.search(
+            r"total deposits reached\s+(?P<current>₹?[\d,]+(?:\.\d+)?\s*crore).*?(?P<pct>\d+(?:\.\d+)?)%\s*yoy\s+growth",
+            context,
+            re.IGNORECASE,
+        )
+        gold_advances = re.search(
+            r"gold advances (?:surged|rose|up)\s+(?P<pct>\d+(?:\.\d+)?)%\s+to\s+(?P<current>₹?[\d,]+(?:\.\d+)?\s*crore)",
+            context,
+            re.IGNORECASE,
+        )
+        total_business = re.search(
+            r"total business reached\s+(?P<current>₹?[\d,]+(?:\.\d+)?\s*crores?).*?(?P<pct>\d+(?:\.\d+)?)%\s*yoy\s+growth",
+            context,
+            re.IGNORECASE,
+        )
+        domestic_advances = re.search(
+            r"domestic gross advances (?:growth )?to\s+(?P<current>₹?[\d.,]+\s*(?:trillion|t|crore|cr))\s+from\s+(?P<prior>₹?[\d.,]+\s*(?:trillion|t|crore|cr))",
+            context,
+            re.IGNORECASE,
+        )
+        global_advances = re.search(
+            r"global advances (?:reach|reached)\s+(?P<current>₹?[\d.,]+\s*(?:trillion|t|crore|cr))\s+from\s+(?P<prior>₹?[\d.,]+\s*(?:trillion|t|crore|cr))",
+            context,
+            re.IGNORECASE,
+        )
+        domestic_deposits = re.search(
+            r"domestic deposits (?:to reach|reach)\s+(?P<current>₹?[\d.,]+\s*(?:trillion|t|crore|cr)).*?from\s+(?P<prior>₹?[\d.,]+\s*(?:trillion|t|crore|cr))",
+            context,
+            re.IGNORECASE,
+        )
+        global_deposits = re.search(
+            r"global deposits (?:are projected at|projected at|reach|reached)\s+(?P<current>₹?[\d.,]+\s*(?:trillion|t|crore|cr))",
+            context,
+            re.IGNORECASE,
+        )
+        advances_growth = re.search(
+            r"gross advances (?:surged|grew|rose|up)\s+(?P<pct>\d+(?:\.\d+)?)%",
+            context,
+            re.IGNORECASE,
+        )
+        deposit_growth_secondary = re.search(
+            r"deposits (?:grew|rose|up)\s+(?P<pct>\d+(?:\.\d+)?)%",
+            context,
+            re.IGNORECASE,
+        )
+
+        if advances and deposits:
+            advances_comp = f" ({advances.group('comp').upper()})" if advances.group("comp") else ""
+            deposits_comp = f" ({deposits.group('comp').upper()})" if deposits.group("comp") else ""
+            left = f"GROSS ADVANCES AT {self._normalize_money(advances.group('current'))} VS {self._normalize_money(advances.group('prior'))}{advances_comp}"
+            right = f"TOTAL DEPOSITS AT {self._normalize_money(deposits.group('current'))} VS {self._normalize_money(deposits.group('prior'))}{deposits_comp}"
+            return f"{subject}: {left} || {right}"
+        if deposit_level:
+            left = f"DEPOSITS AT {self._normalize_money(deposit_level.group('current'))}, UP {deposit_level.group('pct')}% YOY"
+            if gold_advances:
+                right = f"GOLD ADVANCES UP {gold_advances.group('pct')}% TO {self._normalize_money(gold_advances.group('current'))}"
+                return f"{subject}: {left} || {right}"
+            return f"{subject}: {left}"
+        if total_business:
+            left = f"TOTAL BUSINESS AT {self._normalize_money(total_business.group('current'))}, UP {total_business.group('pct')}% YOY"
+            right_parts: list[str] = []
+            if advances_growth:
+                right_parts.append(f"ADVANCES UP {advances_growth.group('pct')}%")
+            if deposit_growth_secondary:
+                right_parts.append(f"DEPOSITS UP {deposit_growth_secondary.group('pct')}%")
+            if right_parts:
+                return f"{subject}: {left} || {'; '.join(right_parts)}"
+            return f"{subject}: {left}"
+        if domestic_advances:
+            left = f"DOMESTIC ADVANCES AT {self._normalize_money(domestic_advances.group('current'))} VS {self._normalize_money(domestic_advances.group('prior'))}"
+            if global_advances:
+                right = f"GLOBAL ADVANCES AT {self._normalize_money(global_advances.group('current'))} VS {self._normalize_money(global_advances.group('prior'))}"
+                return f"{subject}: {left} || {right}"
+            return f"{subject}: {left}"
+        if domestic_deposits:
+            left = f"DOMESTIC DEPOSITS AT {self._normalize_money(domestic_deposits.group('current'))} VS {self._normalize_money(domestic_deposits.group('prior'))}"
+            if global_deposits:
+                right = f"GLOBAL DEPOSITS AT {self._normalize_money(global_deposits.group('current'))}"
+                return f"{subject}: {left} || {right}"
+            return f"{subject}: {left}"
+        if deposit_growth and business:
+            return f"{subject}: DEPOSITS UP {deposit_growth.group('pct')} || TOTAL BUSINESS UP {business.group('pct')}"
+        if deposit_growth:
+            return f"{subject}: DEPOSITS UP {deposit_growth.group('pct')}"
+        if business:
+            return f"{subject}: TOTAL BUSINESS UP {business.group('pct')}"
+        return None
+
+    def _market_metrics_wire_text(self, context: str, facts: dict) -> str | None:
+        loans_deposits = re.search(
+            r"bank loans rise to\s+(?P<loans>₹?[\d.,]+\s*(?:trillion|t|crore|cr))[, ]+\s*deposits at\s+(?P<deposits>₹?[\d.,]+\s*(?:trillion|t|crore|cr))",
+            context,
+            re.IGNORECASE,
+        )
+        if loans_deposits:
+            loans = self._normalize_money(loans_deposits.group("loans"))
+            deposits = self._normalize_money(loans_deposits.group("deposits"))
+            prior_match = re.search(
+                r"loans increasing from\s+(?P<loan_prior>₹?[\d.,]+\s*(?:trillion|t|crore|cr))\s+to\s+₹?[\d.,]+\s*(?:trillion|t|crore|cr),\s+while deposits climb from\s+(?P<deposit_prior>₹?[\d.,]+\s*(?:trillion|t|crore|cr))\s+to\s+₹?[\d.,]+\s*(?:trillion|t|crore|cr)",
+                context,
+                re.IGNORECASE,
+            )
+            if prior_match:
+                loan_prior = self._normalize_money(prior_match.group("loan_prior"))
+                deposit_prior = self._normalize_money(prior_match.group("deposit_prior"))
+                return f"BANKING: LOANS AT {loans} VS {loan_prior} || DEPOSITS AT {deposits} VS {deposit_prior}"
+            return f"BANKING: LOANS AT {loans} || DEPOSITS AT {deposits}"
+
+        oil_match = re.search(
+            r"oil futures surge above\s+\$?(?P<level>\d+(?:\.\d+)?)\s+per barrel",
+            context,
+            re.IGNORECASE,
+        )
+        if oil_match:
+            return f"US OIL FUTURES: ABOVE ${oil_match.group('level')}/BBL"
+
+        if "strait of hormuz" in context.lower() and "tolls" in context.lower():
+            return "IRAN: TO SET TOLLS FOR SHIPS THROUGH STRAIT OF HORMUZ"
+
+        tariff_match = re.search(
+            r"(?P<who>trump|u\.?s\.?|us)\s+plans?\s+(?P<pct>\d+%)\s+tariff\s+on\s+(?P<body>.+)",
+            context,
+            re.IGNORECASE,
+        )
+        if tariff_match:
+            body = tariff_match.group("body").upper().strip(" .")
+            return f"US: PLANS {tariff_match.group('pct')} TARIFF ON {body}"
+
         return None
 
     def _wire_context_text(self, facts: dict) -> str:

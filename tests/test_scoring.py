@@ -117,6 +117,14 @@ def test_classify_tradient_project_win_as_order_win() -> None:
     ) == "order_win"
 
 
+def test_classify_tradient_oil_futures_as_macro_release() -> None:
+    assert classify_event_type(
+        "US Oil Futures Surge Above $110 Per Barrel Mark",
+        "tradient_market_news",
+        body_text="US oil futures continue their upward trajectory, breaking through the significant $110 per barrel threshold amid ongoing market dynamics.",
+    ) == "macro_release"
+
+
 def test_wire_facts_adjustment_rewards_structured_sales_update() -> None:
     assert wire_facts_adjustment(
         {
@@ -127,6 +135,15 @@ def test_wire_facts_adjustment_rewards_structured_sales_update() -> None:
             "secondary_metric_value": "198,000",
         }
     ) > 0
+
+
+def test_wire_facts_adjustment_penalizes_tiny_orders() -> None:
+    assert wire_facts_adjustment(
+        {
+            "kind": "order_win",
+            "amount_value": "RS 1.23 CRORE",
+        }
+    ) < 0
 
 
 def test_score_event_uses_wire_facts() -> None:

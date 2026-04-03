@@ -61,6 +61,39 @@ def classify_event_type(
             return "sebi_circular"  # treat SEBI press releases as policy circulars
         return "sebi_circular"  # default for SEBI items not otherwise classifiable
     if source_name == "tradient_market_news":
+        if any(term in combined for term in (
+            "gross advances",
+            "bank gross advances",
+            "total deposits",
+            "bank total deposits",
+            "total business",
+            "deposits at",
+            "advances seen at",
+            "credit growth",
+            "loan growth",
+            "bank loans rise",
+            "inflation",
+        )):
+            return "macro_release"
+        if "interest rate" in combined or "repo rate" in combined or " repo " in f" {combined} ":
+            return "macro_release"
+        if any(term in combined for term in (
+            "tariff",
+            "strait of hormuz",
+            "foreign minister",
+            "deputy foreign minister",
+            "crude",
+            "oil futures",
+            "oil price",
+            "fuel",
+            "petrol",
+            "diesel",
+            "lpg",
+            "rupee",
+            "tolls",
+            "shipping",
+        )):
+            return "macro_release"
         if sub_category == "legal-compliance" and not any(
             term in combined for term in ("gst demand", "tax demand", "penalty", "order worth", "contract", "letter of award")
         ):
@@ -69,6 +102,7 @@ def classify_event_type(
             "price movement inquiry",
             "newspaper publication",
             "newspaper notice",
+            "demat report",
             "special window",
             "physical securities transfer",
             "takeover regulations",
@@ -110,6 +144,10 @@ def classify_event_type(
         "sales volume",
         "sales rise",
         "sales up",
+        "gross advances",
+        "total deposits",
+        "total business",
+        "deposits up",
         "loan growth",
         "passenger vehicles",
         "production",

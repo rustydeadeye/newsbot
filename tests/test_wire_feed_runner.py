@@ -447,3 +447,71 @@ def test_run_wire_cycle_bumps_non_breaking_jobs_for_breaking_item(monkeypatch) -
     run_wire_cycle()
 
     assert bump_calls["count"] == 1
+
+
+def test_run_wire_cycle_skips_base_fetch_when_recent_base_candidates_exist(monkeypatch) -> None:
+    class StubSource:
+        key = "tradient"
+        name = "tradient_market_news"
+
+    class StubDrafting:
+        pass
+
+    fetch_calls = {"count": 0}
+
+    monkeypatch.setattr("app.wire_feed.runner.get_wire_sources", lambda: [StubSource()])
+    monkeypatch.setattr("app.wire_feed.runner.DraftingService", lambda: StubDrafting())
+
+    def fake_fetch(source, drafting):
+        fetch_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr("app.wire_feed.runner.fetch_and_process", fake_fetch)
+    monkeypatch.setattr("app.wire_feed.runner.plan_wire_queue", lambda results, recent_posts, now, settings: [])
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self):
+            return None
+
+        def get(self, model, ident):
+            return None
+
+    class FakeCandidateRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def has_source_candidate_since(self, source_name, since):
+            return source_name == "tradient_market_news"
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def expire_stale_jobs(self, now, settings):
+            return 0
+
+        def recent_post_records(self, since):
+            return []
+
+    class FakeCustomerRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def has_active_autopost_customer(self):
+            return False
+
+    monkeypatch.setattr("app.wire_feed.runner.SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr("app.wire_feed.runner.WireCandidateRepository", FakeCandidateRepo)
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr("app.wire_feed.runner.CustomerProfileRepository", FakeCustomerRepo)
+
+    summary = run_wire_cycle()
+
+    assert fetch_calls["count"] == 0
+    assert summary["sources_processed"] == 0

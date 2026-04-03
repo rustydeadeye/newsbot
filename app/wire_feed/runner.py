@@ -13,9 +13,11 @@ from app.services.drafting.service import DraftingService
 from app.wire_feed.pipeline import fetch_and_process
 from app.wire_feed.policy import WireFeedSettings, plan_wire_queue
 from app.wire_feed.sources import get_wire_sources
+from app.wire_feed.web_pipeline import fetch_web_breaking_candidates, get_due_web_runs
 
 logger = logging.getLogger(__name__)
 _WIRE_MAX_ATTEMPTS = 3
+_BASE_FETCH_INTERVAL = timedelta(hours=1)
 
 
 def run_wire_cycle() -> dict[str, list[dict] | int]:
@@ -41,13 +43,38 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
         recent_records = job_repo.recent_post_records(now - timedelta(days=1))
         summary["skipped"] += expired
 
+        candidate_batches: list[tuple[str, list]] = []
+        has_source_candidate_since = getattr(candidate_repo, "has_source_candidate_since", lambda source_name, since: False)
         for source in get_wire_sources():
-            results = fetch_and_process(source, drafting)
-            decisions = plan_wire_queue(results, recent_posts=recent_records, now=now, settings=policy)
-            summary["sources_processed"] += 1
-            summary["candidates"] += len(results)
+            source_name = getattr(source, "name", None) or f"{source.key}_market_news"
+            if has_source_candidate_since(source_name, now - _BASE_FETCH_INTERVAL):
+                continue
+            candidate_batches.append((source.key, fetch_and_process(source, drafting)))
+
+        if settings.wire_web_breaking_enabled:
+            due_runs = get_due_web_runs(now, candidate_repo.has_source_candidate_since)
+            for run in due_runs:
+                candidate_batches.append((run.key, fetch_web_breaking_candidates(run)))
+
+        all_results = [result for _, results in candidate_batches for result in results]
+        decisions = plan_wire_queue(all_results, recent_posts=recent_records, now=now, settings=policy)
+        decisions_by_source: dict[str, list] = {source_key: [] for source_key, _ in candidate_batches}
+        for decision in decisions:
+            source_key = getattr(decision.result, "source_name", None) or (
+                candidate_batches[0][0] if len(candidate_batches) == 1 else "unknown"
+            )
+            if source_key == "tradient_market_news":
+                source_key = "tradient"
+            if source_key.startswith("openai_web_breaking_"):
+                source_key = source_key.removeprefix("openai_web_breaking_")
+            decisions_by_source.setdefault(source_key, []).append(decision)
+
+        summary["sources_processed"] += len(candidate_batches)
+        summary["candidates"] += len(all_results)
+
+        for source_key, source_decisions in decisions_by_source.items():
             source_items: list[dict] = []
-            for decision in decisions:
+            for decision in source_decisions:
                 candidate = candidate_repo.upsert_from_result(decision.result)
                 if decision.priority == "breaking" and decision.action in {"post_now", "queue"} and decision.scheduled_for is not None:
                     job_repo.bump_non_breaking_queue(decision.scheduled_for, policy)
@@ -71,7 +98,7 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
                 )
             cast_items = summary["items"]
             if isinstance(cast_items, list):
-                cast_items.append({"source": source.key, "decisions": source_items})
+                cast_items.append({"source": source_key, "decisions": source_items})
 
         db.commit()
         if CustomerProfileRepository(db).has_active_autopost_customer():

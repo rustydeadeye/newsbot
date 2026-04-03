@@ -86,6 +86,10 @@ def headline_relevance_adjustment(
         "domestic sales",
         "turnover",
         "guidance",
+        "gross advances",
+        "total deposits",
+        "total business",
+        "pre-sales",
         "record production",
         "production surges",
         "ebitda",
@@ -102,6 +106,22 @@ def headline_relevance_adjustment(
         "loan growth",
         "wins project",
         "project worth",
+        "tariff",
+        "strait of hormuz",
+        "foreign minister",
+        "deputy foreign minister",
+        "crude",
+        "oil",
+        "fuel",
+        "petrol",
+        "diesel",
+        "lpg",
+        "rupee",
+        "interest rate",
+        "repo",
+        "inflation",
+        "shipping",
+        "tolls",
     )
     medium_positive_terms = (
         "sales",
@@ -164,6 +184,17 @@ def headline_relevance_adjustment(
     if category == "indian-economy":
         adjustment += 5
 
+    if any(term in combined for term in ("gross advances", "total deposits", "total business", "credit growth", "loan growth", "interest rate", "repo rate", "inflation")) or " repo " in f" {combined} ":
+        adjustment += 8
+
+    if any(term in combined for term in ("tariff", "strait of hormuz", "foreign minister", "deputy foreign minister", "crude", "oil futures", "rupee", "fuel", "petrol", "diesel", "lpg", "shipping", "tolls")):
+        adjustment += 8
+
+    if "0.93 crore" in combined or "rs. 0.93 crore" in combined or "rs 0.93 crore" in combined:
+        adjustment -= 12
+    if "1.52 crore" in combined or "1.52 cr" in combined:
+        adjustment -= 4
+
     if "withdraws" in combined or "withdrawal of" in combined:
         adjustment -= 6
 
@@ -199,6 +230,19 @@ def wire_facts_adjustment(wire_facts: dict | None) -> int:
         adjustment += 2
     if wire_facts.get("change_pct"):
         adjustment += 2
+    amount_value = str(wire_facts.get("amount_value") or "").upper()
+    small_cr_match = None
+    if amount_value:
+        import re
+        small_cr_match = re.search(r"RS\s*([\d.]+)\s*(?:CR|CRORE)", amount_value)
+    if small_cr_match:
+        amount = float(small_cr_match.group(1))
+        if amount < 2:
+            adjustment -= 12
+        elif amount < 5:
+            adjustment -= 8
+        elif amount < 10:
+            adjustment -= 4
 
     return adjustment
 

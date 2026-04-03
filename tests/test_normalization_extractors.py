@@ -281,7 +281,69 @@ def test_extract_tradient_wire_facts_for_tax_demand() -> None:
         "kind": "tax_demand",
         "subject_label": "FINOLEX CABLES",
         "amount_value": "RS 29.46 CRORE",
-        "metric_label": "GST DEMAND ORDER",
+        "metric_label": "TAX DEMAND",
+    }
+
+
+def test_extract_tradient_wire_facts_for_tax_demand_cut_with_appeal() -> None:
+    source = Source(name="tradient_market_news", type="json", base_url="https://api.tradient.org/v1/api/market/news")
+    item = SourceItem(
+        source_id=1,
+        external_id="tradient:tax-cut",
+        url="https://api.tradient.org/v1/api/market/news",
+        title="Kokuyo Camlin Tax Demand Cut from ₹162.97 to ₹34.05 Cr",
+        published_at=datetime(2026, 4, 1, 3, 45, tzinfo=timezone.utc),
+        raw_payload={
+            "company": "Kokuyo Camlin",
+            "display_symbol": "Kokuyo Camlin",
+            "ticker": "KOKUYOCMLN",
+            "text": "Kokuyo Camlin receives rectified income tax order reducing demand from ₹162.97 crore to ₹34.05 crore for AY 2018-19. Company plans to appeal the revised demand citing strong grounds for contestation.",
+            "news_type": "tradient_market_news",
+            "release_type": "market_news",
+        },
+        checksum="tradient-tax-cut",
+    )
+
+    facts = extract_facts(source, item)
+
+    assert facts["wire_facts"] == {
+        "kind": "tax_demand",
+        "subject_label": "KOKUYO CAMLIN",
+        "amount_value": "RS 34.05 CRORE",
+        "previous_amount": "RS 162.97 CRORE",
+        "metric_label": "TAX DEMAND",
+        "extra_clause": "CO TO APPEAL",
+    }
+
+
+def test_extract_tradient_wire_facts_for_order_with_delivery_context() -> None:
+    source = Source(name="tradient_market_news", type="json", base_url="https://api.tradient.org/v1/api/market/news")
+    item = SourceItem(
+        source_id=1,
+        external_id="tradient:order-delivery",
+        url="https://api.tradient.org/v1/api/market/news",
+        title="BD Industries Receives ₹10.08 Crore Spacer Order",
+        published_at=datetime(2026, 4, 1, 3, 45, tzinfo=timezone.utc),
+        raw_payload={
+            "company": "BD Industries",
+            "display_symbol": "BD Industries",
+            "ticker": "BDI",
+            "text": "BD Industries (Pune) Limited secured a domestic purchase order worth ₹10.08 crore for spacer supply, with delivery scheduled by August 31, 2026, as disclosed under SEBI regulations.",
+            "news_type": "tradient_market_news",
+            "release_type": "market_news",
+        },
+        checksum="tradient-order-delivery",
+    )
+
+    facts = extract_facts(source, item)
+
+    assert facts["wire_facts"] == {
+        "kind": "order_win",
+        "subject_label": "BD",
+        "amount_value": "RS 10.08 CRORE",
+        "counterparty_or_body": "SPACER SUPPLY",
+        "metric_label": "ORDER",
+        "extra_clause": "DELIVERY BY AUGUST 31, 2026",
     }
 
 

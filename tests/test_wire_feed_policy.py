@@ -10,10 +10,12 @@ def _candidate(
     event_type: str = "earnings",
     ticker: str | None = "ABC",
     subject_key: str | None = None,
+    source_family: str = "base",
 ) -> WirePipelineResult:
     return WirePipelineResult(
         external_id=f"{ticker or 'market'}-{title}",
         source_name="tradient_market_news",
+        source_family=source_family,
         title=title,
         event_type=event_type,
         dedupe_key=f"{event_type}|{(ticker or 'market').lower()}|{(subject_key or title).lower()}",
@@ -25,6 +27,7 @@ def _candidate(
         review_reason=None,
         draft_text=title,
         safety_flags={},
+        raw_payload={"source_family": source_family},
         published_at=datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc),
     )
 
@@ -82,6 +85,17 @@ def test_plan_wire_queue_delays_non_breaking_items_during_quiet_hours() -> None:
     assert decisions[0].scheduled_for == datetime(2026, 4, 2, 1, 30, tzinfo=timezone.utc)  # 07:00 IST
 
 
+def test_plan_wire_queue_allows_web_items_during_quiet_hours() -> None:
+    now = datetime(2026, 4, 1, 20, 30, tzinfo=timezone.utc)  # 02:00 IST on Apr 2
+    candidate = _candidate("Overnight web update", 90, event_type="macro_release", ticker=None, source_family="web")
+    candidate = candidate.__class__(**{**candidate.__dict__, "published_at": now - timedelta(hours=1)})
+
+    decisions = plan_wire_queue([candidate], now=now)
+
+    assert decisions[0].action == "post_now"
+    assert decisions[0].scheduled_for == now
+
+
 def test_plan_wire_queue_allows_breaking_items_during_quiet_hours() -> None:
     now = datetime(2026, 4, 1, 20, 30, tzinfo=timezone.utc)  # 02:00 IST on Apr 2
     candidate = _candidate("Overnight breaking", 95, event_type="default_fraud", ticker="NEWS")
@@ -122,3 +136,35 @@ def test_plan_wire_queue_posts_now_outside_quiet_hours() -> None:
 
     assert decisions[0].action == "post_now"
     assert decisions[0].scheduled_for == now
+
+
+def test_plan_wire_queue_prioritizes_web_candidates_when_scores_are_close() -> None:
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
+    candidates = [
+        _candidate("Base candidate", 88, ticker="BASE", source_family="base"),
+        _candidate("Web candidate", 86, ticker="WEB", source_family="web"),
+    ]
+
+    decisions = plan_wire_queue(candidates, now=now, settings=WireFeedSettings(max_posts_per_hour=10))
+
+    assert decisions[0].result.title == "Web candidate"
+    assert decisions[0].action == "post_now"
+
+
+def test_plan_wire_queue_respects_per_family_daily_caps() -> None:
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
+    recent = [
+        WirePostRecord(
+            dedupe_key=f"macro|web{i}",
+            posted_at=now - timedelta(hours=i + 2),
+            source_family="web",
+            source_name="openai_web_breaking_midday",
+        )
+        for i in range(7)
+    ]
+
+    candidate = _candidate("One more web", 90, ticker="WEB", source_family="web")
+    decisions = plan_wire_queue([candidate], recent_posts=recent, now=now)
+
+    assert decisions[0].action == "skip"
+    assert decisions[0].reason == "web_daily_limit"

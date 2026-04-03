@@ -76,6 +76,7 @@ _MARKET_IMPACT_BLOCK_TERMS = (
     "annual disclosure under sebi regulations",
     "regulation 74(5)",
     "demat certificate",
+    "demat report",
     "non-applicability of lc framework",
     "not a large corporate",
     "large corporate disclosure",
@@ -92,12 +93,16 @@ _MARKET_IMPACT_KEEP_TERMS = (
     "advances up",
     "deposits up",
     "business growth",
+    "loan growth",
+    "credit growth",
+    "bank loans rise",
+    "bank total deposits",
+    "bank gross advances",
     "sales",
     "volume",
     "production",
     "offtake",
     "pre-sales",
-    "loan growth",
     "deposits",
     "advances",
     "order",
@@ -123,8 +128,18 @@ _MARKET_IMPACT_KEEP_TERMS = (
     "rating downgraded",
     "tariff",
     "crude",
+    "oil futures",
     "oil",
+    "fuel",
+    "petrol",
+    "diesel",
+    "lpg",
     "rupee",
+    "interest rate",
+    "repo",
+    "inflation",
+    "tolls",
+    "shipping",
     "strait of hormuz",
     "foreign minister",
     "deputy foreign minister",
@@ -143,6 +158,7 @@ _MARKET_FIRST_EVENT_TYPES = {
 class WirePipelineResult:
     external_id: str
     source_name: str
+    source_family: str
     title: str
     event_type: str
     dedupe_key: str
@@ -154,6 +170,7 @@ class WirePipelineResult:
     review_reason: str | None
     draft_text: str
     safety_flags: dict
+    raw_payload: dict
     published_at: datetime | None
     fetch_error: str | None = None
 
@@ -168,6 +185,7 @@ def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> l
             WirePipelineResult(
                 external_id="",
                 source_name=source_def.name,
+                source_family="base",
                 title="",
                 event_type="",
                 dedupe_key="",
@@ -179,6 +197,7 @@ def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> l
                 review_reason=None,
                 draft_text="",
                 safety_flags={},
+                raw_payload={"source_family": "base"},
                 published_at=None,
                 fetch_error=f"{type(exc).__name__}: {exc}",
             )
@@ -209,6 +228,7 @@ def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> l
             WirePipelineResult(
                 external_id=fetched.external_id,
                 source_name=source_def.name,
+                source_family="base",
                 title=fetched.title or "",
                 event_type=facts["event_class"],
                 dedupe_key=make_dedupe_key(
@@ -226,10 +246,18 @@ def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> l
                 review_reason=reason,
                 draft_text=draft.draft_text,
                 safety_flags=draft.safety_flags,
+                raw_payload={
+                    "source_family": "base",
+                    "subject_key": facts.get("subject_key"),
+                    "safety_flags": draft.safety_flags,
+                    "category": facts.get("category"),
+                    "sub_category": facts.get("sub_category"),
+                    "wire_facts": facts.get("wire_facts"),
+                },
                 published_at=fetched.published_at,
             )
         )
-    return _dedupe_results(results)
+    return _apply_diversity_adjustment(_dedupe_results(results))
 
 
 def summarize_results(results: list[WirePipelineResult], limit: int = 10) -> str:
@@ -316,6 +344,66 @@ def _prefer_result(candidate: WirePipelineResult, existing: WirePipelineResult) 
     if candidate_date != existing_date:
         return candidate_date > existing_date
     return candidate.importance_score > existing.importance_score
+
+
+def _apply_diversity_adjustment(results: list[WirePipelineResult]) -> list[WirePipelineResult]:
+    ordered = sorted(
+        results,
+        key=lambda result: (
+            result.importance_score,
+            result.published_at or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+        reverse=True,
+    )
+    family_counts: dict[str, int] = {}
+    adjusted: list[WirePipelineResult] = []
+    for result in ordered:
+        family = _result_family(result)
+        seen = family_counts.get(family, 0)
+        penalty = min(seen * 6, 18)
+        adjusted.append(
+            WirePipelineResult(
+                external_id=result.external_id,
+                source_name=result.source_name,
+                source_family=result.source_family,
+                title=result.title,
+                event_type=result.event_type,
+                dedupe_key=result.dedupe_key,
+                subject_key=result.subject_key,
+                ticker=result.ticker,
+                importance_score=max(result.importance_score - penalty, 0),
+                confidence_score=result.confidence_score,
+                would_auto_post=result.would_auto_post,
+                review_reason=result.review_reason,
+                draft_text=result.draft_text,
+                safety_flags=result.safety_flags,
+                raw_payload=result.raw_payload,
+                published_at=result.published_at,
+                fetch_error=result.fetch_error,
+            )
+        )
+        family_counts[family] = seen + 1
+    return adjusted
+
+
+def _result_family(result: WirePipelineResult) -> str:
+    combined = f"{result.title} {result.draft_text}".lower()
+
+    if any(term in combined for term in ("gross advances", "total deposits", "total business", "loan growth", "deposits at", "advances up")):
+        return "banking_metrics"
+    if any(term in combined for term in ("oil futures", "tariff", "hormuz", "crude", "rupee", "fuel", "shipping", "tolls")):
+        return "macro_market"
+    if any(term in combined for term in ("tax demand", "gst demand", "default", "penalty")) or result.event_type == "default_fraud":
+        return "tax_penalty_default"
+    if any(term in combined for term in ("order worth", "contract worth", "wins", "secures", "project")) or result.event_type == "order_win":
+        return "orders_contracts"
+    if any(term in combined for term in ("sales", "production", "offtake", "pre-sales", "turnover", "total business")):
+        return "company_business_metrics"
+    if any(term in combined for term in ("approval", "consent to operate", "trial ops", "rbi approval")):
+        return "regulatory_approvals"
+    if any(term in combined for term in ("stake", "investment", "warrants", "acquires", "deposits rs")):
+        return "deals_stakes"
+    return result.event_type or "other"
 
 
 def _should_drop_wire_candidate(facts: dict) -> bool:

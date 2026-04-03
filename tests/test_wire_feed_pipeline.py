@@ -4,7 +4,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://dryrun:dryrun@localh
 
 from datetime import datetime, timezone
 
-from app.wire_feed.pipeline import _should_drop_wire_candidate, fetch_and_process
+from app.wire_feed.pipeline import _apply_diversity_adjustment, _should_drop_wire_candidate, fetch_and_process, WirePipelineResult
 from app.wire_feed.sources import WireSourceDef
 
 
@@ -45,6 +45,14 @@ def test_should_drop_wire_candidate_for_low_signal_promoter_and_compliance_items
             "wire_facts": None,
         }
     )
+    assert _should_drop_wire_candidate(
+        {
+            "event_class": "macro_release",
+            "headline": "Niwas Spinning Mills Q4 FY26 Demat Report",
+            "article_text": "",
+            "wire_facts": None,
+        }
+    )
 
 
 def test_should_not_drop_wire_candidate_for_sales_and_order_updates() -> None:
@@ -74,6 +82,30 @@ def test_should_not_drop_wire_candidate_for_sales_and_order_updates() -> None:
         {
             "event_class": "general_update",
             "headline": "Iran Deputy Foreign Minister Says Iran Will Set Tolls For Ships Traveling Through The Strait Of Hormuz",
+            "article_text": "",
+            "wire_facts": None,
+        }
+    )
+    assert not _should_drop_wire_candidate(
+        {
+            "event_class": "macro_release",
+            "headline": "Bank Loans Rise to ₹3.5 Trillion, Deposits at ₹4.7 Trillion",
+            "article_text": "",
+            "wire_facts": None,
+        }
+    )
+    assert not _should_drop_wire_candidate(
+        {
+            "event_class": "macro_release",
+            "headline": "Iran Deputy Foreign Minister Says Iran Will Set Tolls For Ships Traveling Through The Strait Of Hormuz",
+            "article_text": "",
+            "wire_facts": None,
+        }
+    )
+    assert not _should_drop_wire_candidate(
+        {
+            "event_class": "macro_release",
+            "headline": "Trump Plans 25% Tariff on Finished Steel & Aluminum",
             "article_text": "",
             "wire_facts": None,
         }
@@ -232,3 +264,69 @@ def test_fetch_and_process_filters_sebi_appeal_but_keeps_bank_metrics(monkeypatc
 
     assert len(results) == 1
     assert results[0].title == "RBL Bank Gross Advances Seen At 1.15T Rupees Vs 948B (YOY)"
+
+
+def test_diversity_adjustment_rotates_families_near_top() -> None:
+    now = datetime.now(timezone.utc)
+    results = [
+        WirePipelineResult(
+            external_id="1",
+            source_name="tradient_market_news",
+            source_family="base",
+            title="Bank Loans Rise to ₹3.5 Trillion, Deposits at ₹4.7 Trillion",
+            event_type="macro_release",
+            dedupe_key="1",
+            subject_key="1",
+            ticker="BANKING",
+            importance_score=95,
+            confidence_score=0.95,
+            would_auto_post=True,
+            review_reason=None,
+            draft_text="BANKING: LOANS AT RS 3.5 TRILLION VS RS 2.9 TRILLION || DEPOSITS AT RS 4.7 TRILLION VS RS 4.1 TRILLION",
+            safety_flags={},
+            raw_payload={"source_family": "base"},
+            published_at=now,
+        ),
+        WirePipelineResult(
+            external_id="2",
+            source_name="tradient_market_news",
+            source_family="base",
+            title="CSB Bank Reports Strong 20% Growth in Deposits",
+            event_type="macro_release",
+            dedupe_key="2",
+            subject_key="2",
+            ticker="CSBBANK",
+            importance_score=94,
+            confidence_score=0.95,
+            would_auto_post=True,
+            review_reason=None,
+            draft_text="CSB BANK: DEPOSITS AT RS 44,246 CRORE, UP 20% YOY || GOLD ADVANCES UP 53% TO RS 21,567 CRORE",
+            safety_flags={},
+            raw_payload={"source_family": "base"},
+            published_at=now,
+        ),
+        WirePipelineResult(
+            external_id="3",
+            source_name="tradient_market_news",
+            source_family="base",
+            title="US Oil Futures Surge Above $110 Per Barrel Mark",
+            event_type="macro_release",
+            dedupe_key="3",
+            subject_key="3",
+            ticker="OIL",
+            importance_score=93,
+            confidence_score=0.95,
+            would_auto_post=True,
+            review_reason=None,
+            draft_text="US OIL FUTURES: ABOVE $110/BBL",
+            safety_flags={},
+            raw_payload={"source_family": "base"},
+            published_at=now,
+        ),
+    ]
+
+    adjusted = sorted(_apply_diversity_adjustment(results), key=lambda item: item.importance_score, reverse=True)
+
+    assert adjusted[0].title == "Bank Loans Rise to ₹3.5 Trillion, Deposits at ₹4.7 Trillion"
+    assert adjusted[1].title == "US Oil Futures Surge Above $110 Per Barrel Mark"
+    assert adjusted[2].title == "CSB Bank Reports Strong 20% Growth in Deposits"
