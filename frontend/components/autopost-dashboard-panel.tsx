@@ -14,6 +14,19 @@ function formatPostingWindow(startHour: number, endHour: number, timezone: strin
   return `${startHour}:00 to ${endHour}:00 ${timezone}`;
 }
 
+function formatPipelineLabel(sourceFamily: string, lane: string | null, sourceName: string) {
+  if (sourceFamily === "web") {
+    if (lane === "india_preopen") return "Tavily preopen";
+    if (lane === "india_close") return "Tavily close";
+    if (lane === "global_impact") return "Tavily global";
+    return "Tavily web";
+  }
+  if (sourceName === "tradient_market_news") {
+    return "Tradient";
+  }
+  return "Base wire";
+}
+
 export function AutopostDashboardPanel({ initialDashboard }: { initialDashboard: AutopostDashboard }) {
   const router = useRouter();
   const [dashboard, setDashboard] = useState(initialDashboard);
@@ -103,11 +116,12 @@ export function AutopostDashboardPanel({ initialDashboard }: { initialDashboard:
         ) : (
           <div className="log-list">
             {dashboard.next_posts.map((post) => (
-              <div key={post.id} className="publish-row">
+                <div key={post.id} className="publish-row">
                 <div className="row space">
                   <div className="row">
                     <span className="pill warn">queued</span>
                     <span className="mono">{post.ticker ?? "MARKET"}</span>
+                    <span className="card-subtle">{formatPipelineLabel(post.source_family, post.lane, post.source_name)}</span>
                   </div>
                   <span className="card-subtle">{formatOptionalDateTime(post.scheduled_for, "Asia/Kolkata") ?? "Time unavailable"}</span>
                 </div>
@@ -127,7 +141,10 @@ export function AutopostDashboardPanel({ initialDashboard }: { initialDashboard:
             {dashboard.recent_posts.map((post) => (
               <div key={post.id} className="publish-log-row">
                 <div className="row space">
-                  <span className="pill">posted</span>
+                  <div className="row">
+                    <span className="pill">posted</span>
+                    <span className="card-subtle">{formatPipelineLabel(post.source_family, post.lane, post.source_name ?? "unknown")}</span>
+                  </div>
                   <span className="card-subtle">{formatOptionalDateTime(post.posted_at, "Asia/Kolkata") ?? "Time unavailable"}</span>
                 </div>
                 <div className="queue-row-title">{post.tweet_text ?? "Posted item"}</div>

@@ -45,7 +45,7 @@ export default async function RootLayout({
                 items={
                   IS_AUTOPOST_MODE
                     ? auth.viewer.role === "admin"
-                      ? [{ href: getRoleHomePath("admin") as Route, label: "Wire Feed" }, { href: "/settings" as Route, label: "Settings" }]
+                      ? [{ href: getRoleHomePath("admin") as Route, label: "Wire Feed" }]
                       : [{ href: getRoleHomePath("customer") as Route, label: "Autopost" }]
                     : auth.viewer.role === "admin"
                       ? adminNavItems

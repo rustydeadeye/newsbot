@@ -16,7 +16,7 @@ import { requireWorkspaceSession } from "@/lib/viewer";
 export default async function SettingsPage() {
   const { viewer, accessToken, onboarding, onboardingError } = await requireWorkspaceSession();
   const role = viewer.role;
-  if (IS_AUTOPOST_MODE && role === "customer") {
+  if (IS_AUTOPOST_MODE) {
     redirect(getRoleHomePath(role));
   }
   if (role === "customer" && onboardingError) {

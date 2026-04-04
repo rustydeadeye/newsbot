@@ -196,6 +196,9 @@ export type AutopostDashboard = {
     tweet_text: string;
     source_title: string;
     ticker: string | null;
+    source_name: string;
+    source_family: string;
+    lane: string | null;
   }[];
   recent_posts: {
     id: number;
@@ -204,6 +207,9 @@ export type AutopostDashboard = {
     tweet_text: string | null;
     source_title: string | null;
     ticker: string | null;
+    source_name: string | null;
+    source_family: string;
+    lane: string | null;
     x_url: string | null;
   }[];
 };

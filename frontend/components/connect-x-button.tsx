@@ -3,9 +3,10 @@
 import { useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 
+import { getRoleHomePath } from "@/lib/product-mode";
 import { getXConnectUrl } from "@/lib/api";
 
-export function ConnectXButton({ connected, nextPath = "/settings" }: { connected: boolean; nextPath?: string }) {
+export function ConnectXButton({ connected, nextPath = getRoleHomePath("customer") }: { connected: boolean; nextPath?: string }) {
   const searchParams = useSearchParams();
   const justConnected = searchParams.get("x_connected") === "1";
   const oauthError = searchParams.get("x_error");

@@ -60,6 +60,9 @@ def _autopost_dashboard_payload(db: Session, viewer: ViewerContext) -> dict:
             "tweet_text": candidate.draft_text,
             "source_title": candidate.title,
             "ticker": candidate.ticker,
+            "source_name": candidate.source_name,
+            "source_family": str((candidate.raw_payload or {}).get("source_family") or "base"),
+            "lane": (candidate.raw_payload or {}).get("lane"),
         }
         for candidate, job in job_repo.list_upcoming(limit=3)
     ]
@@ -71,6 +74,9 @@ def _autopost_dashboard_payload(db: Session, viewer: ViewerContext) -> dict:
             "tweet_text": candidate.draft_text if candidate else None,
             "source_title": candidate.title if candidate else None,
             "ticker": candidate.ticker if candidate else None,
+            "source_name": candidate.source_name if candidate else None,
+            "source_family": str(((candidate.raw_payload or {}) if candidate else {}).get("source_family") or "base"),
+            "lane": ((candidate.raw_payload or {}) if candidate else {}).get("lane"),
             "x_url": f"https://x.com/i/web/status/{log.platform_post_id}" if log.platform_post_id else None,
         }
         for log, _job, candidate in job_repo.list_logs_with_candidates_recent(limit=10)
@@ -217,7 +223,7 @@ def update_creator_settings(
 
 @router.get("/x/connect")
 def x_oauth_connect(
-    next_path: str = "/settings",
+    next_path: str = "/autopost",
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> dict:
     """Return a X OAuth 2.0 authorization URL for the viewer to redirect to."""
