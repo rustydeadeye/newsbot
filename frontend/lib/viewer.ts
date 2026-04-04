@@ -1,9 +1,8 @@
 import { redirect } from "next/navigation";
 import { cache } from "react";
 
-import { getAuthMe, getOnboardingStatus } from "@/lib/api";
+import { getAuthMe } from "@/lib/api";
 import { ViewerProfile } from "@/lib/session";
-import { OnboardingStatus } from "@/lib/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const readServerViewer = cache(async (): Promise<{ viewer: ViewerProfile; accessToken: string } | null> => {
@@ -46,21 +45,9 @@ export async function requireServerViewer(): Promise<{ viewer: ViewerProfile; ac
 export async function requireWorkspaceSession(): Promise<{
   viewer: ViewerProfile;
   accessToken: string;
-  onboarding: OnboardingStatus | null;
+  onboarding: null;
   onboardingError: string | null;
 }> {
   const auth = await requireServerViewer();
-  if (!auth.viewer.role || auth.viewer.role !== "customer") {
-    return { ...auth, onboarding: null, onboardingError: null };
-  }
-  try {
-    const onboarding = await getOnboardingStatus(auth.accessToken);
-    return { ...auth, onboarding, onboardingError: null };
-  } catch (error) {
-    return {
-      ...auth,
-      onboarding: null,
-      onboardingError: error instanceof Error ? error.message : "Failed to load onboarding state",
-    };
-  }
+  return { ...auth, onboarding: null, onboardingError: null };
 }

@@ -167,34 +167,13 @@ def update_creator_settings(
             viewer.workspace_user_id,
             default_display_name=viewer.display_name,
         )
-        allowed_keys = {
-            "display_name",
-            "tone",
-            "language",
-            "watchlist",
-            "blocked_phrases",
-            "openai_api_key",
-            "automation_mode",
-            "freshness_window_hours",
-            "max_posts_per_hour",
-            "timezone",
-            "posting_window_start",
-            "posting_window_end",
-            "auto_post_enabled",
-            "auto_post_threshold",
-        }
+        allowed_keys = {"display_name", "auto_post_enabled"}
         update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
-        if "openai_api_key" in update_payload:
-            token_store = dict(settings.token_store or {})
-            token_store["openai_api_key"] = update_payload.pop("openai_api_key")
-            update_payload["token_store"] = token_store
     else:
         repo = CreatorSettingsRepository(db)
         settings = repo.get_or_create_default()
-        if "openai_api_key" in update_payload:
-            token_store = dict(settings.token_store or {})
-            token_store["openai_api_key"] = update_payload.pop("openai_api_key")
-            update_payload["token_store"] = token_store
+        allowed_keys = {"display_name", "auto_post_enabled"}
+        update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
 
     if "timezone" in update_payload:
         try:
@@ -205,16 +184,6 @@ def update_creator_settings(
                 status_code=422,
                 content={"detail": [{"loc": ["body", "timezone"], "msg": "Unknown timezone identifier. Use a valid tz name such as Asia/Kolkata."}]},
             )
-
-    # openai_api_key is a secret — store in token_store, not as a plain column
-    openai_api_key = update_payload.pop("openai_api_key", None)
-    if openai_api_key is not None:
-        store = dict(settings.token_store or {})
-        if openai_api_key == "":
-            store.pop("openai_api_key", None)
-        else:
-            store["openai_api_key"] = openai_api_key
-        settings.token_store = store
 
     updated = repo.update(settings, update_payload)
     db.commit()
