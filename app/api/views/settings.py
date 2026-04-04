@@ -4,18 +4,16 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfoNotFoundError
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.api.schemas import CreatorSettingsUpdate
+from app.api.schemas import ProfileSettingsUpdate
 from app.api.security import ViewerContext, get_current_viewer
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.repositories.creators import CreatorSettingsRepository
 from app.repositories.customers import CustomerProfileRepository
 from app.repositories.wire_feed import WireJobRepository
 
@@ -95,21 +93,19 @@ def _autopost_dashboard_payload(db: Session, viewer: ViewerContext) -> dict:
     }
 
 
-@router.get("/creator")
-def get_creator_settings(
+@router.get("/profile")
+def get_profile_settings(
     db: Session = Depends(get_db),
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> dict:
-    if viewer.is_customer:
-        profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(
-            viewer.workspace_user_id,
-            default_display_name=viewer.display_name,
-        )
-        db.commit()
-        return profile.to_dict()
-    settings = CreatorSettingsRepository(db).get_or_create_default()
+    if not viewer.is_customer:
+        raise HTTPException(status_code=403, detail="Customer access required")
+    profile = CustomerProfileRepository(db).get_or_create_for_workspace_user(
+        viewer.workspace_user_id,
+        default_display_name=viewer.display_name,
+    )
     db.commit()
-    return settings.to_dict()
+    return profile.to_dict()
 
 
 @router.get("/autopost")
@@ -154,37 +150,22 @@ def resume_autopost(
     return _autopost_dashboard_payload(db, viewer)
 
 
-@router.put("/creator")
-def update_creator_settings(
-    payload: CreatorSettingsUpdate,
+@router.put("/profile")
+def update_profile_settings(
+    payload: ProfileSettingsUpdate,
     db: Session = Depends(get_db),
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> JSONResponse:
+    if not viewer.is_customer:
+        raise HTTPException(status_code=403, detail="Customer access required")
     update_payload = payload.model_dump(exclude_none=True)
-    if viewer.is_customer:
-        repo = CustomerProfileRepository(db)
-        settings = repo.get_or_create_for_workspace_user(
-            viewer.workspace_user_id,
-            default_display_name=viewer.display_name,
-        )
-        allowed_keys = {"display_name", "auto_post_enabled"}
-        update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
-    else:
-        repo = CreatorSettingsRepository(db)
-        settings = repo.get_or_create_default()
-        allowed_keys = {"display_name", "auto_post_enabled"}
-        update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
-
-    if "timezone" in update_payload:
-        try:
-            from zoneinfo import ZoneInfo
-            ZoneInfo(update_payload["timezone"])
-        except (ZoneInfoNotFoundError, KeyError):
-            return JSONResponse(
-                status_code=422,
-                content={"detail": [{"loc": ["body", "timezone"], "msg": "Unknown timezone identifier. Use a valid tz name such as Asia/Kolkata."}]},
-            )
-
+    repo = CustomerProfileRepository(db)
+    settings = repo.get_or_create_for_workspace_user(
+        viewer.workspace_user_id,
+        default_display_name=viewer.display_name,
+    )
+    allowed_keys = {"display_name", "auto_post_enabled"}
+    update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
     updated = repo.update(settings, update_payload)
     db.commit()
     return JSONResponse(content=updated.to_dict())
@@ -232,25 +213,17 @@ def x_disconnect(
     db: Session = Depends(get_db),
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> dict:
-    if viewer.is_customer:
-        repo = CustomerProfileRepository(db)
-        profile = repo.get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
-        store = dict(profile.token_store or {})
-        store.pop("x_access_token", None)
-        store.pop("x_refresh_token", None)
-        profile.token_store = store
-        profile.auto_post_enabled = False
-        db.commit()
-        return {"x_connected": False, "autopost_enabled": False}
-
-    repo = CreatorSettingsRepository(db)
-    creator = repo.get_or_create_default()
-    store = dict(creator.token_store or {})
+    if not viewer.is_customer:
+        raise HTTPException(status_code=403, detail="Customer access required")
+    repo = CustomerProfileRepository(db)
+    profile = repo.get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
+    store = dict(profile.token_store or {})
     store.pop("x_access_token", None)
     store.pop("x_refresh_token", None)
-    creator.token_store = store
+    profile.token_store = store
+    profile.auto_post_enabled = False
     db.commit()
-    return {"x_connected": False}
+    return {"x_connected": False, "autopost_enabled": False}
 
 
 @router.get("/x/callback")
@@ -307,22 +280,13 @@ def x_oauth_callback(
     if not access_token:
         return RedirectResponse(url=f"{frontend_settings}?x_error=no_access_token")
 
-    if pkce.get("target") == "customer":
-        repo = CustomerProfileRepository(db)
-        profile = repo.get_or_create_for_workspace_user(pkce["workspace_user_id"])
-        store = dict(profile.token_store or {})
-        store["x_access_token"] = access_token
-        if refresh_token:
-            store["x_refresh_token"] = refresh_token
-        profile.token_store = store
-    else:
-        repo = CreatorSettingsRepository(db)
-        creator = repo.get_or_create_default()
-        store = dict(creator.token_store or {})
-        store["x_access_token"] = access_token
-        if refresh_token:
-            store["x_refresh_token"] = refresh_token
-        creator.token_store = store
+    repo = CustomerProfileRepository(db)
+    profile = repo.get_or_create_for_workspace_user(pkce["workspace_user_id"])
+    store = dict(profile.token_store or {})
+    store["x_access_token"] = access_token
+    if refresh_token:
+        store["x_refresh_token"] = refresh_token
+    profile.token_store = store
     db.commit()
 
     return RedirectResponse(url=f"{frontend_settings}?x_connected=1")

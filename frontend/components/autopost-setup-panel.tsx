@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { ConnectXButton } from "@/components/connect-x-button";
-import { updateCreatorSettings } from "@/lib/api";
+import { updateProfileSettings } from "@/lib/api";
 
 export function AutopostSetupPanel({
   displayName,
@@ -22,7 +22,7 @@ export function AutopostSetupPanel({
     setMessage(null);
     startTransition(async () => {
       try {
-        await updateCreatorSettings({ display_name: name.trim() });
+        await updateProfileSettings({ display_name: name.trim() });
         setMessage("Name saved.");
         router.refresh();
       } catch (error) {

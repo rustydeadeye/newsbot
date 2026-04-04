@@ -1,5 +1,5 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-import { AuthMeResponse, AutopostDashboard, CreatorSettings, WireJob, WirePublishLog } from "@/lib/types";
+import { AuthMeResponse, AutopostDashboard, WireJob, WirePublishLog } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -11,8 +11,9 @@ type FetchJsonOptions = RequestInit & {
   accessToken?: string | null;
 };
 
-type CreatorSettingsUpdate = Partial<CreatorSettings> & {
-  openai_api_key?: string;
+type ProfileSettingsUpdate = {
+  display_name?: string;
+  auto_post_enabled?: boolean;
 };
 
 async function getAccessToken(accessToken?: string | null) {
@@ -98,8 +99,8 @@ export function disconnectXAccount() {
   });
 }
 
-export function updateCreatorSettings(payload: CreatorSettingsUpdate) {
-  return fetchJson<CreatorSettings>("/settings/creator", {
+export function updateProfileSettings(payload: ProfileSettingsUpdate) {
+  return fetchJson<{ display_name: string | null; auto_post_enabled?: boolean }>("/settings/profile", {
     method: "PUT",
     body: JSON.stringify(payload)
   });
