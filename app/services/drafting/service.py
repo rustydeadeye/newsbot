@@ -138,15 +138,11 @@ class DraftingService:
         cleaned = re.sub(r"(?i)\bSEBI will issue\b", "SEBI to issue", cleaned)
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
         cleaned = cleaned.rstrip("-–| ").strip()
-        max_len = 220 if self._omit_source_attribution(facts) else 240
+        max_len = 220
         if len(cleaned) > max_len:
             truncated = cleaned[: max_len - 3]
             last_space = truncated.rfind(" ")
             cleaned = (truncated[:last_space] if last_space > 180 else truncated).rstrip() + "..."
-        if not self._omit_source_attribution(facts) and "source:" not in cleaned.lower() and facts.get("attribution_required"):
-            source_name = self._display_source_name(facts)
-            separator = "" if cleaned.endswith(".") else "."
-            cleaned = f"{cleaned}{separator} Source: {source_name}."
         return cleaned
 
     def _display_source_name(self, facts: dict) -> str:
@@ -875,14 +871,11 @@ class DraftingService:
         return " ".join(part for part in parts if part).strip()
 
     def _omit_source_attribution(self, facts: dict) -> bool:
-        return str(facts.get("source_name") or "") == "tradient_market_news"
+        return True
 
     def _with_optional_source(self, text: str, facts: dict, source_override: str | None = None) -> str:
         cleaned = text.strip().rstrip(".")
-        if self._omit_source_attribution(facts):
-            return cleaned
-        source_name = source_override or self._display_source_name(facts)
-        return f"{cleaned}. Source: {source_name}."
+        return cleaned
 
     def _headline_as_wire(self, headline: str) -> str:
         if ":" in headline:
