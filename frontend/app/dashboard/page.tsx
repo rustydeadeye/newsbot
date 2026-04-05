@@ -1,10 +1,10 @@
 import { AccessDenied } from "@/components/access-denied";
 import { AdminApiErrorPanel } from "@/components/admin-api-error-panel";
 import { AutopostDashboardPanel } from "@/components/autopost-dashboard-panel";
-import { AutopostSetupPanel } from "@/components/autopost-setup-panel";
 import { ShellHeader } from "@/components/shell-header";
 import { getAutopostDashboard } from "@/lib/api";
 import { requireServerViewer } from "@/lib/viewer";
+import { redirect } from "next/navigation";
 
 export default async function DashboardPage() {
   const { viewer, accessToken } = await requireServerViewer();
@@ -42,17 +42,7 @@ export default async function DashboardPage() {
         viewer={viewer}
         freshnessLabel="Live customer dashboard"
       />
-      {dashboard.status === "setup_required" ? (
-        <AutopostSetupPanel
-          displayName={dashboard.display_name}
-          wireProduct={dashboard.wire_product}
-          xConnected={dashboard.x_connected}
-          openaiConfigured={dashboard.openai_configured}
-          tavilyConfigured={dashboard.tavily_configured}
-        />
-      ) : (
-        <AutopostDashboardPanel initialDashboard={dashboard} />
-      )}
+      {dashboard.status === "setup_required" ? redirect("/onboarding") : <AutopostDashboardPanel initialDashboard={dashboard} />}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
 const PUBLIC_PATHS = new Set(["/login", "/auth/callback", "/auth/session"]);
-const LEGACY_REDIRECT_PATHS = new Set(["/drafts", "/events", "/jobs", "/onboarding", "/settings"]);
+const LEGACY_REDIRECT_PATHS = new Set(["/drafts", "/events", "/jobs", "/settings"]);
 const FRIENDLY_REDIRECTS = new Map([
   ["/autopost", "/dashboard"],
   ["/wire", "/operations"],
