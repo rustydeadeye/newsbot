@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { disconnectXAccount, pauseAutopost, resumeAutopost, updateProfileSettings } from "@/lib/api";
-import { formatOptionalDateTime } from "@/lib/lifecycle-ui";
+import { formatOptionalDateTime, formatPipelineLabel } from "@/lib/lifecycle-ui";
 import { AutopostDashboard } from "@/lib/types";
 
 function formatPostingWindow(startHour: number, endHour: number, timezone: string) {
@@ -12,24 +12,6 @@ function formatPostingWindow(startHour: number, endHour: number, timezone: strin
     return `24/7 ${timezone}`;
   }
   return `${startHour}:00 to ${endHour}:00 ${timezone}`;
-}
-
-function formatPipelineLabel(product: string, sourceFamily: string, lane: string | null, sourceName: string) {
-  if (sourceFamily === "web") {
-    if (product === "ai") {
-      if (lane === "product_updates") return "Tavily AI products";
-      if (lane === "industry_moves") return "Tavily AI industry";
-      if (lane === "policy_regulation") return "Tavily AI policy";
-      return "Tavily AI web";
-    }
-    if (lane === "india_preopen") return "Tavily preopen";
-    if (lane === "india_close") return "Tavily close";
-    if (lane === "global_impact") return "Tavily global";
-    return "Tavily web";
-  }
-  if (product === "ai") return "AI base";
-  if (sourceName === "tradient_market_news") return "Tradient";
-  return "Base wire";
 }
 
 export function AutopostDashboardPanel({ initialDashboard }: { initialDashboard: AutopostDashboard }) {

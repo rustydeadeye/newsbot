@@ -7,10 +7,10 @@ import { WireFeedQueuePanel } from "@/components/wire-feed-queue-panel";
 import { getWireJobs, getWireLogs } from "@/lib/api";
 import { requireServerViewer } from "@/lib/viewer";
 
-export default async function WireFeedPage() {
+export default async function OperationsPage() {
   const { viewer, accessToken } = await requireServerViewer();
   if (viewer.role !== "admin") {
-    return <AccessDenied title="Wire Feed" description="Monitor queue health, publishing outcomes, and what the runtime is doing across products." />;
+    return <AccessDenied title="Operations" description="Monitor queue health, publishing outcomes, and what the runtime is doing across products." />;
   }
 
   let wireJobs;
@@ -21,34 +21,42 @@ export default async function WireFeedPage() {
     return (
       <div className="page-grid">
         <ShellHeader
-          title="Wire Feed"
-          description="Live queue health, posting outcomes, and operator controls across finance and AI autopost products."
+          title="Operations"
+          description="Live queue health, posting outcomes, and operator controls across finance and AI products."
           viewer={viewer}
-          freshnessLabel="Live operator workspace"
+          freshnessLabel="Live operations workspace"
         />
         <AdminApiErrorPanel
-          title="Wire feed unavailable"
+          title="Operations unavailable"
           detail={error instanceof Error ? error.message : "Unknown API error"}
         />
       </div>
     );
   }
 
-  const queued = wireJobs.filter((job) => job.status === "queued").length;
-  const publishing = wireJobs.filter((job) => job.status === "publishing").length;
-  const failed = wireJobs.filter((job) => job.status === "failed").length;
-  const skipped = wireJobs.filter((job) => job.status === "skipped").length;
-  const aiJobs = wireJobs.filter((job) => job.candidate?.product === "ai").length;
-  const financeJobs = wireJobs.filter((job) => (job.candidate?.product ?? "finance") === "finance").length;
-  const webJobs = wireJobs.filter((job) => job.candidate?.source_family === "web").length;
-  const baseJobs = wireJobs.filter((job) => (job.candidate?.source_family ?? "base") === "base").length;
+  const { queued, publishing, failed, skipped, aiJobs, financeJobs, webJobs, baseJobs } = wireJobs.reduce(
+    (acc, job) => {
+      if (job.status === "queued") acc.queued += 1;
+      else if (job.status === "publishing") acc.publishing += 1;
+      else if (job.status === "failed") acc.failed += 1;
+      else if (job.status === "skipped") acc.skipped += 1;
+      const product = job.candidate?.product ?? "finance";
+      if (product === "ai") acc.aiJobs += 1;
+      else acc.financeJobs += 1;
+      const family = job.candidate?.source_family ?? "base";
+      if (family === "web") acc.webJobs += 1;
+      else acc.baseJobs += 1;
+      return acc;
+    },
+    { queued: 0, publishing: 0, failed: 0, skipped: 0, aiJobs: 0, financeJobs: 0, webJobs: 0, baseJobs: 0 },
+  );
 
   return (
     <div className="page-grid">
       <ShellHeader
-        eyebrow="Operator Runtime"
-        title="Wire Feed"
-        description="Monitor the shared autopost runtime, inspect queue quality, and keep publishing healthy across products."
+        eyebrow="Operations"
+        title="Operations"
+        description="Monitor the shared publishing runtime, inspect queue quality, and keep posting healthy across products."
         viewer={viewer}
         freshnessLabel="Queue, skips, retries, and recent posts"
       />
@@ -61,10 +69,10 @@ export default async function WireFeedPage() {
       </div>
       <StatusPanel
         eyebrow="Operator focus"
-        title={failed > 0 ? "Clear wire-feed failures first" : "Wire-feed runtime is healthy"}
+        title={failed > 0 ? "Clear publishing failures first" : "Publishing runtime is healthy"}
         description={
           failed > 0
-            ? "Resolve publishing failures before trusting new queued posts. This view is the single control surface for the live autopost runtime."
+            ? "Resolve publishing failures before trusting new queued posts. This page is the single control surface for the live runtime."
             : "Use this page to inspect queue quality, duplicate handling, retries, and what the shared runtime actually published."
         }
         tone={failed > 0 ? "danger" : "default"}

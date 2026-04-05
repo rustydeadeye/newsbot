@@ -101,13 +101,29 @@ export function AuthForm() {
           Create Account
         </button>
       </div>
-      <label>
+      <label htmlFor="auth-email">
         <span className="field-label">Email</span>
-        <input className="editor compact" value={email} onChange={(event) => setEmail(event.target.value)} />
+        <input
+          id="auth-email"
+          className="editor compact"
+          type="email"
+          autoComplete="email"
+          maxLength={254}
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+        />
       </label>
-      <label>
+      <label htmlFor="auth-password">
         <span className="field-label">Password</span>
-        <input className="editor compact" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        <input
+          id="auth-password"
+          className="editor compact"
+          type="password"
+          autoComplete={mode === "signin" ? "current-password" : "new-password"}
+          maxLength={128}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
       </label>
       <button className="button" disabled={isPending} onClick={submit} type="button">
         {mode === "signin" ? "Sign In" : "Create Account"}

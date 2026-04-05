@@ -18,6 +18,10 @@ export function ConnectXButton({ connected, nextPath = getRoleHomePath("customer
     startTransition(async () => {
       try {
         const { auth_url } = await getXConnectUrl(null, nextPath);
+        const parsed = new URL(auth_url);
+        if (parsed.protocol !== "https:" || !["x.com", "api.x.com", "twitter.com"].includes(parsed.hostname)) {
+          throw new Error("OAuth redirect URL did not come from a trusted X domain.");
+        }
         window.location.href = auth_url;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to start X OAuth");

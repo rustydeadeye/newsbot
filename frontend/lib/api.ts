@@ -116,7 +116,7 @@ export function updateProfileSettings(payload: ProfileSettingsUpdate) {
   });
 }
 
-export function getXConnectUrl(accessToken?: string | null, nextPath = "/autopost") {
+export function getXConnectUrl(accessToken?: string | null, nextPath = "/dashboard") {
   return fetchJson<{ auth_url: string }>(`/settings/x/connect?next_path=${encodeURIComponent(nextPath)}`, { accessToken });
 }
 

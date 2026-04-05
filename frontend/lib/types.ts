@@ -1,5 +1,9 @@
 import { ViewerProfile } from "@/lib/session";
 
+export type WireProduct = "finance" | "ai";
+
+export type WireJobStatus = "queued" | "publishing" | "failed" | "skipped" | "cancelled" | "posted";
+
 export type EventSummary = {
   id: number;
   event_type: string;
@@ -97,7 +101,7 @@ export type WireCandidateSummary = {
   last_action: string | null;
   last_reason: string | null;
   last_scheduled_for: string | null;
-  product?: string;
+  product?: WireProduct;
   source_family?: string;
   lane?: string | null;
 };
@@ -105,7 +109,7 @@ export type WireCandidateSummary = {
 export type WireJob = {
   id: number;
   candidate_id: number;
-  status: string;
+  status: WireJobStatus;
   priority: string;
   scheduled_for: string | null;
   attempt_count: number;

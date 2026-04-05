@@ -106,10 +106,12 @@ export function AutopostSetupPanel({
       </div>
 
       <div className="panel stack">
-        <label>
+        <label htmlFor="setup-display-name">
           <span className="field-label">Display name</span>
           <input
+            id="setup-display-name"
             className="editor compact"
+            maxLength={100}
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="How should Newsbot refer to you?"
@@ -118,7 +120,7 @@ export function AutopostSetupPanel({
         <div className="settings-layout">
           <div className="briefing-section">
             <div className="row space">
-              <strong>OpenAI API key</strong>
+              <label htmlFor="setup-openai-key"><strong>OpenAI API key</strong></label>
               <span className={openaiConfigured ? "pill success" : "pill warn"}>
                 {openaiConfigured ? "connected" : "needed"}
               </span>
@@ -127,7 +129,11 @@ export function AutopostSetupPanel({
               Used for drafting, rewriting, and ranking your posts.
             </div>
             <input
+              id="setup-openai-key"
               className="editor compact"
+              type="password"
+              autoComplete="off"
+              maxLength={200}
               value={openAiKey}
               onChange={(event) => setOpenAiKey(event.target.value)}
               placeholder={openaiConfigured ? "OpenAI key already saved. Paste a new key to replace it." : "Paste your OpenAI API key"}
@@ -138,7 +144,7 @@ export function AutopostSetupPanel({
           </div>
           <div className="briefing-section">
             <div className="row space">
-              <strong>Tavily API key</strong>
+              <label htmlFor="setup-tavily-key"><strong>Tavily API key</strong></label>
               <span className={tavilyConfigured ? "pill success" : "pill warn"}>
                 {tavilyConfigured ? "connected" : "needed"}
               </span>
@@ -147,7 +153,11 @@ export function AutopostSetupPanel({
               Used to search the web and find the latest news for your pipeline.
             </div>
             <input
+              id="setup-tavily-key"
               className="editor compact"
+              type="password"
+              autoComplete="off"
+              maxLength={200}
               value={tavilyKey}
               onChange={(event) => setTavilyKey(event.target.value)}
               placeholder={tavilyConfigured ? "Tavily key already saved. Paste a new key to replace it." : "Paste your Tavily API key"}
@@ -174,7 +184,7 @@ export function AutopostSetupPanel({
             {isPending ? "Saving…" : "Save setup"}
           </button>
         </div>
-        <ConnectXButton connected={xConnected} nextPath="/autopost" />
+        <ConnectXButton connected={xConnected} nextPath="/dashboard" />
         <div className="card-subtle">
           Once setup is saved and all three integrations are connected, Newsbot can build and publish from your live queue.
         </div>

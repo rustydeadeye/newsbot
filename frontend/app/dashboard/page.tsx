@@ -6,10 +6,10 @@ import { ShellHeader } from "@/components/shell-header";
 import { getAutopostDashboard } from "@/lib/api";
 import { requireServerViewer } from "@/lib/viewer";
 
-export default async function AutopostPage() {
+export default async function DashboardPage() {
   const { viewer, accessToken } = await requireServerViewer();
   if (viewer.role !== "customer") {
-    return <AccessDenied title="Autopost" description="This simple autopost surface is only available in the customer workspace." />;
+    return <AccessDenied title="Dashboard" description="This customer dashboard is only available in the client workspace." />;
   }
 
   let dashboard;
@@ -19,14 +19,14 @@ export default async function AutopostPage() {
     return (
       <div className="page-grid">
         <ShellHeader
-          eyebrow="Autopost"
-          title="Your autopost workspace"
+          eyebrow="Customer Dashboard"
+          title="Your dashboard"
           description="Choose your news product, connect X, and let Newsbot handle the daily posting flow for you."
           viewer={viewer}
-          freshnessLabel="Live customer autopost"
+          freshnessLabel="Live customer dashboard"
         />
         <AdminApiErrorPanel
-          title="Autopost unavailable"
+          title="Dashboard unavailable"
           detail={error instanceof Error ? error.message : "Unknown API error"}
         />
       </div>
@@ -36,11 +36,11 @@ export default async function AutopostPage() {
   return (
     <div className="page-grid">
       <ShellHeader
-        eyebrow="Customer Autopost"
-        title="Your autopost workspace"
+        eyebrow="Customer Dashboard"
+        title="Your dashboard"
         description="Track your live posting flow, see what is scheduled next, and keep your feed clear without digging through operator detail."
         viewer={viewer}
-        freshnessLabel="Live customer autopost"
+        freshnessLabel="Live customer dashboard"
       />
       {dashboard.status === "setup_required" ? (
         <AutopostSetupPanel

@@ -8,7 +8,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Newsbot Dashboard",
-  description: "Operations dashboard for finance news automation"
+  description: "Customer dashboard and operations workspace for automated publishing"
 };
 
 export default async function RootLayout({
@@ -25,7 +25,7 @@ export default async function RootLayout({
             <aside className="sidebar">
               <NavShell
                 viewer={auth.viewer}
-                items={[{ href: getRoleHomePath(auth.viewer.role) as Route, label: auth.viewer.role === "admin" ? "Wire Feed" : "Autopost" }]}
+                items={[{ href: getRoleHomePath(auth.viewer.role) as Route, label: auth.viewer.role === "admin" ? "Operations" : "Dashboard" }]}
               />
             </aside>
             <main className="content">{children}</main>

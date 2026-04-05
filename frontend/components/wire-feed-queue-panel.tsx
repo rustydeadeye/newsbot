@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 
 import { cancelWireJob, retryWireJob } from "@/lib/api";
-import { formatOptionalDateTime } from "@/lib/lifecycle-ui";
+import { formatOptionalDateTime, formatPipelineLabel } from "@/lib/lifecycle-ui";
 import { WireJob, WirePublishLog } from "@/lib/types";
 
 const WIRE_REASON_LABELS: Record<string, string> = {
@@ -16,24 +16,6 @@ const WIRE_REASON_LABELS: Record<string, string> = {
   cancelled_by_admin: "Cancelled by admin",
   manual_retry: "Queued again by admin",
 };
-
-function formatPipelineLabel(product?: string, sourceFamily?: string, lane?: string | null, sourceName?: string) {
-  if (sourceFamily === "web") {
-    if (product === "ai") {
-      if (lane === "product_updates") return "AI web / products";
-      if (lane === "industry_moves") return "AI web / industry";
-      if (lane === "policy_regulation") return "AI web / policy";
-      return "AI web";
-    }
-    if (lane === "india_preopen") return "Finance web / preopen";
-    if (lane === "india_close") return "Finance web / close";
-    if (lane === "global_impact") return "Finance web / global";
-    return "Finance web";
-  }
-  if (product === "ai") return "AI base";
-  if (sourceName === "tradient_market_news") return "Tradient";
-  return "Finance base";
-}
 
 function formatProductLabel(product?: string) {
   return product === "ai" ? "AI" : "Finance";

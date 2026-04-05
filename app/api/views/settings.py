@@ -201,7 +201,7 @@ def update_profile_settings(
 
 @router.get("/x/connect")
 def x_oauth_connect(
-    next_path: str = "/autopost",
+    next_path: str = "/dashboard",
     viewer: ViewerContext = Depends(get_current_viewer),
 ) -> dict:
     """Return a X OAuth 2.0 authorization URL for the viewer to redirect to."""
@@ -263,7 +263,7 @@ def x_oauth_callback(
 ) -> RedirectResponse:
     """X OAuth 2.0 callback — exchanges code for tokens, stores them, redirects to frontend."""
     cfg = get_settings()
-    frontend_settings = f"{cfg.frontend_url.rstrip('/')}/autopost"
+    frontend_settings = f"{cfg.frontend_url.rstrip('/')}/dashboard"
 
     if error:
         return RedirectResponse(url=f"{frontend_settings}?x_error={error}")
@@ -274,7 +274,7 @@ def x_oauth_callback(
     pkce = _pkce_store.pop(state, None)
     if not pkce:
         return RedirectResponse(url=f"{frontend_settings}?x_error=invalid_state")
-    frontend_settings = f"{cfg.frontend_url.rstrip('/')}{pkce.get('next_path', '/settings')}"
+    frontend_settings = f"{cfg.frontend_url.rstrip('/')}{pkce.get('next_path', '/dashboard')}"
 
     # Exchange authorization code for tokens
     auth_header = base64.b64encode(
