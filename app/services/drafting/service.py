@@ -16,13 +16,13 @@ logger = logging.getLogger(__name__)
 from app.core.config import get_settings
 from app.models.event import DraftPost, Event
 from app.prompts import SAFETY_BLOCKLIST, STYLE_BLOCKLIST
-from app.services.drafting.prompts import POST_GENERATION_PROMPT, PROMPT_VERSION
+from app.services.drafting.prompts import AI_WIRE_POST_PROMPT, AI_WIRE_PROMPT_VERSION, POST_GENERATION_PROMPT, PROMPT_VERSION
 
 
 class DraftingService:
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
         settings = get_settings()
-        self.model = settings.openai_model
+        self.model = model or settings.openai_model
         resolved_key = api_key or settings.openai_api_key
         self.client = OpenAI(api_key=resolved_key) if resolved_key and OpenAI else None
 
@@ -111,6 +111,44 @@ class DraftingService:
             prompt_version=PROMPT_VERSION,
         )
 
+    def build_ai_wire_post(self, facts: dict) -> tuple[str, dict, float]:
+        fallback = self._ai_fallback_text(facts)
+        if not self.client:
+            return fallback, self._safety_flags(fallback), 0.0
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You write public-facing AI news posts for social media. "
+                    "Keep them factual, simple, and useful. "
+                    "Always respond with valid JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"{AI_WIRE_POST_PROMPT}\n\nFacts:\n{facts}",
+            },
+        ]
+        raw = self._call_openai_with_retry(messages)
+        parsed = self._parse_json_response(raw)
+        if parsed:
+            text = self._normalize_ai_text(parsed.get("post_text", "").strip() or fallback)
+            confidence = float(parsed.get("confidence", 0.0))
+            needs_review = bool(parsed.get("needs_review", False))
+            review_reason = parsed.get("review_reason")
+            flags = self._safety_flags(text)
+            if needs_review:
+                flags["needs_review"] = True
+            if review_reason:
+                flags["review_reason"] = review_reason
+            flags["prompt_version"] = AI_WIRE_PROMPT_VERSION
+            return text, flags, confidence
+        text = self._normalize_ai_text((raw or fallback).strip())
+        flags = self._safety_flags(text)
+        flags["prompt_version"] = AI_WIRE_PROMPT_VERSION
+        return text, flags, 0.0
+
     def _fallback_text(self, facts: dict) -> str:
         template_text = self._template_text(facts)
         if template_text:
@@ -157,6 +195,34 @@ class DraftingService:
             "mospi_releases": "MOSPI",
         }
         return mapping.get(source_name, source_name.replace("_", " ").upper())
+
+    def _ai_fallback_text(self, facts: dict) -> str:
+        company = str(facts.get("company") or "AI company").strip()
+        headline = str(facts.get("headline") or "AI update").strip().rstrip(".")
+        article_text = str(facts.get("article_text") or "").strip()
+        if article_text:
+            compact = " ".join(article_text.split())
+            if compact and compact.lower() not in headline.lower():
+                candidate = f"{headline}. {compact}"
+            else:
+                candidate = headline
+        else:
+            candidate = headline
+        if not candidate:
+            candidate = f"{company} has an AI update."
+        return self._normalize_ai_text(candidate)
+
+    def _normalize_ai_text(self, text: str) -> str:
+        cleaned = " ".join(text.split())
+        cleaned = re.sub(r"\s+([.,;:!?])", r"\1", cleaned).strip()
+        cleaned = re.sub(r"(?i)\bsource:\s*[^.]+\.?", "", cleaned).strip()
+        cleaned = re.sub(r"\b(AI)\s+AI\b", r"\1", cleaned)
+        max_len = 240
+        if len(cleaned) > max_len:
+            truncated = cleaned[: max_len - 3]
+            last_space = truncated.rfind(" ")
+            cleaned = (truncated[:last_space] if last_space > 180 else truncated).rstrip() + "..."
+        return cleaned
 
     def _template_text(self, facts: dict) -> str | None:
         wire_text = self._wire_template(facts)

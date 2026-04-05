@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -11,10 +11,14 @@ from app.models.types import JSON_VARIANT
 
 class WireCandidate(Base, TimestampMixin):
     __tablename__ = "wire_candidates"
+    __table_args__ = (
+        UniqueConstraint("customer_profile_id", "external_id", name="uq_wire_candidates_customer_external"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_profile_id: Mapped[int] = mapped_column(ForeignKey("customer_profiles.id", ondelete="CASCADE"), index=True)
     source_name: Mapped[str] = mapped_column(String(100), index=True)
-    external_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    external_id: Mapped[str] = mapped_column(String(255), index=True)
     title: Mapped[str] = mapped_column(Text)
     ticker: Mapped[str | None] = mapped_column(String(50), index=True)
     event_type: Mapped[str] = mapped_column(String(50), index=True)

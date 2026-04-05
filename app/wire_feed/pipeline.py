@@ -3,6 +3,7 @@ from __future__ import annotations
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -172,10 +173,13 @@ class WirePipelineResult:
     safety_flags: dict
     raw_payload: dict
     published_at: datetime | None
+    product: str = "finance"
     fetch_error: str | None = None
 
 
 def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> list[WirePipelineResult]:
+    if source_def.product == "ai":
+        return _fetch_and_process_ai(source_def, drafting)
     source = Source(name=source_def.name, type=source_def.type, base_url=source_def.url)
     adapter = source_def.adapter_cls(source)
     try:
@@ -183,6 +187,7 @@ def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> l
     except Exception as exc:
         return [
             WirePipelineResult(
+                product=source_def.product,
                 external_id="",
                 source_name=source_def.name,
                 source_family="base",
@@ -226,6 +231,7 @@ def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> l
         reason = _review_reason(importance, confidence, draft.safety_flags)
         results.append(
             WirePipelineResult(
+                product=source_def.product,
                 external_id=fetched.external_id,
                 source_name=source_def.name,
                 source_family="base",
@@ -248,6 +254,7 @@ def fetch_and_process(source_def: WireSourceDef, drafting: DraftingService) -> l
                 safety_flags=draft.safety_flags,
                 raw_payload={
                     "source_family": "base",
+                    "product": source_def.product,
                     "subject_key": facts.get("subject_key"),
                     "safety_flags": draft.safety_flags,
                     "category": facts.get("category"),
@@ -363,6 +370,7 @@ def _apply_diversity_adjustment(results: list[WirePipelineResult]) -> list[WireP
         penalty = min(seen * 6, 18)
         adjusted.append(
             WirePipelineResult(
+                product=result.product,
                 external_id=result.external_id,
                 source_name=result.source_name,
                 source_family=result.source_family,
@@ -387,6 +395,16 @@ def _apply_diversity_adjustment(results: list[WirePipelineResult]) -> list[WireP
 
 
 def _result_family(result: WirePipelineResult) -> str:
+    if result.product == "ai":
+        if result.event_type in {"model_launch", "api_update", "tool_release"}:
+            return "product_updates"
+        if result.event_type in {"industry_move", "funding_deal"}:
+            return "industry_moves"
+        if result.event_type in {"policy_regulation", "security_incident"}:
+            return "policy_regulation"
+        if result.event_type == "research_update":
+            return "research"
+        return "ai_other"
     combined = f"{result.title} {result.draft_text}".lower()
 
     if any(term in combined for term in ("gross advances", "total deposits", "total business", "loan growth", "deposits at", "advances up")):
@@ -463,3 +481,244 @@ def _should_drop_wire_candidate(facts: dict) -> bool:
             return True
 
     return False
+
+
+_AI_LAUNCH_TERMS = (
+    "launch",
+    "launched",
+    "releases",
+    "released",
+    "unveils",
+    "unveiled",
+    "introduces",
+    "introduced",
+    "rolls out",
+    "rolled out",
+    "debuts",
+    "debut",
+    "available now",
+)
+_AI_API_TERMS = (
+    "api",
+    "sdk",
+    "pricing",
+    "price cut",
+    "rate limit",
+    "context window",
+    "developer",
+    "endpoint",
+    "fine-tuning",
+    "fine tuning",
+    "tool calling",
+    "agent",
+)
+_AI_POLICY_TERMS = (
+    "eu ai act",
+    "policy",
+    "regulation",
+    "regulator",
+    "white house",
+    "copyright",
+    "lawsuit",
+    "ftc",
+    "antitrust",
+    "export control",
+    "safety institute",
+)
+_AI_INDUSTRY_TERMS = (
+    "partnership",
+    "acquisition",
+    "funding",
+    "raised",
+    "valuation",
+    "enterprise",
+    "datacenter",
+    "chips",
+    "cloud",
+    "deal",
+)
+_AI_RESEARCH_TERMS = (
+    "paper",
+    "benchmark",
+    "eval",
+    "evaluation",
+    "leaderboard",
+    "arxiv",
+    "research",
+)
+_AI_BLOCK_TERMS = (
+    "podcast",
+    "webinar",
+    "opinion",
+    "interview",
+    "what is ai",
+    "how to use chatgpt",
+    "best prompts",
+    "roundup",
+    "weekly recap",
+)
+
+
+def _fetch_and_process_ai(source_def: WireSourceDef, drafting: DraftingService) -> list[WirePipelineResult]:
+    source = Source(name=source_def.name, type=source_def.type, base_url=source_def.url)
+    adapter = source_def.adapter_cls(source)
+    try:
+        items = adapter.fetch()
+    except Exception as exc:
+        return [
+            WirePipelineResult(
+                product="ai",
+                external_id="",
+                source_name=source_def.name,
+                source_family="base",
+                title="",
+                event_type="product_update",
+                dedupe_key="",
+                subject_key=None,
+                ticker=None,
+                importance_score=0,
+                confidence_score=0,
+                would_auto_post=False,
+                review_reason=None,
+                draft_text="",
+                safety_flags={},
+                raw_payload={"source_family": "base", "product": "ai"},
+                published_at=None,
+                fetch_error=f"{type(exc).__name__}: {exc}",
+            )
+        ]
+
+    results: list[WirePipelineResult] = []
+    for fetched in items:
+        facts = _extract_ai_facts(source_def.name, fetched)
+        if _should_drop_ai_candidate(facts):
+            continue
+        importance = _score_ai_facts(facts)
+        draft_text, safety_flags, confidence = drafting.build_ai_wire_post(facts)
+        reason = _review_reason(importance, confidence, safety_flags)
+        results.append(
+            WirePipelineResult(
+                product="ai",
+                external_id=fetched.external_id,
+                source_name=source_def.name,
+                source_family="base",
+                title=fetched.title or "",
+                event_type=str(facts["event_class"]),
+                dedupe_key=f"ai|{facts['event_class']}|{facts['subject_key']}",
+                subject_key=str(facts["subject_key"]),
+                ticker=None,
+                importance_score=importance,
+                confidence_score=confidence,
+                would_auto_post=reason is None,
+                review_reason=reason,
+                draft_text=draft_text,
+                safety_flags=safety_flags,
+                raw_payload={
+                    "source_family": "base",
+                    "product": "ai",
+                    "subject_key": facts["subject_key"],
+                    "company": facts["company"],
+                    "article_text": facts["article_text"],
+                    "category": facts["category"],
+                },
+                published_at=fetched.published_at,
+            )
+        )
+    return _apply_diversity_adjustment(_dedupe_results(results))
+
+
+def _extract_ai_facts(source_name: str, fetched: FetchedItem) -> dict:
+    title = (fetched.title or "").strip()
+    summary = " ".join(str(fetched.raw_payload.get(key) or "") for key in ("summary", "description", "content", "text")).strip()
+    article_text = " ".join(part for part in [title, summary] if part).strip()
+    company = _ai_company_from_source(source_name, title)
+    event_class = _classify_ai_event(title, summary)
+    category = _ai_category(event_class)
+    subject_key = re.sub(r"[^a-z0-9]+", "-", f"{company}-{title}".lower()).strip("-")[:140]
+    return {
+        "headline": title,
+        "article_text": summary,
+        "combined_text": article_text,
+        "source_name": source_name,
+        "source_url": fetched.url,
+        "company": company,
+        "event_class": event_class,
+        "category": category,
+        "subject_key": subject_key,
+        "published_at": fetched.published_at.isoformat() if fetched.published_at else None,
+    }
+
+
+def _ai_company_from_source(source_name: str, title: str) -> str:
+    mapping = {
+        "openai_news": "OpenAI",
+        "anthropic_news": "Anthropic",
+        "google_ai_blog": "Google",
+        "meta_ai_blog": "Meta",
+        "azure_ai_blog": "Microsoft",
+        "xai_news": "xAI",
+        "mistral_news": "Mistral",
+        "cohere_blog": "Cohere",
+        "perplexity_blog": "Perplexity",
+        "huggingface_blog": "Hugging Face",
+    }
+    if source_name in mapping:
+        return mapping[source_name]
+    if ":" in title:
+        return title.split(":", 1)[0].strip()
+    return source_name.replace("_", " ").title()
+
+
+def _classify_ai_event(title: str, summary: str) -> str:
+    text = f"{title} {summary}".lower()
+    if any(term in text for term in _AI_POLICY_TERMS):
+        return "policy_regulation"
+    if any(term in text for term in ("security", "breach", "outage", "safety issue", "misuse")):
+        return "security_incident"
+    if any(term in text for term in _AI_API_TERMS):
+        return "api_update"
+    if any(term in text for term in _AI_LAUNCH_TERMS):
+        return "model_launch"
+    if any(term in text for term in _AI_INDUSTRY_TERMS):
+        return "industry_move"
+    if any(term in text for term in _AI_RESEARCH_TERMS):
+        return "research_update"
+    return "product_update"
+
+
+def _ai_category(event_class: str) -> str:
+    if event_class in {"model_launch", "api_update", "product_update"}:
+        return "product_updates"
+    if event_class in {"industry_move", "funding_deal"}:
+        return "industry_moves"
+    if event_class in {"policy_regulation", "security_incident"}:
+        return "policy_regulation"
+    return "research"
+
+
+def _should_drop_ai_candidate(facts: dict) -> bool:
+    text = f"{facts.get('headline', '')} {facts.get('article_text', '')}".lower()
+    if any(term in text for term in _AI_BLOCK_TERMS):
+        return True
+    if facts.get("event_class") == "research_update" and not any(
+        term in text for term in ("launch", "available", "policy", "copyright", "enterprise", "adoption", "developer")
+    ):
+        return True
+    return False
+
+
+def _score_ai_facts(facts: dict) -> int:
+    event_class = str(facts.get("event_class") or "")
+    text = f"{facts.get('headline', '')} {facts.get('article_text', '')}".lower()
+    score = 78
+    if event_class in {"model_launch", "api_update"}:
+        score += 10
+    elif event_class in {"policy_regulation", "security_incident"}:
+        score += 8
+    elif event_class == "industry_move":
+        score += 5
+    if any(term in text for term in ("pricing", "free", "paid", "$", "million", "billion", "enterprise", "developer")):
+        score += 4
+    if any(term in text for term in ("openai", "anthropic", "google", "meta", "microsoft", "xai")):
+        score += 3
+    return min(score, 95)

@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.repositories.customers import CustomerProfileRepository
 from app.repositories.wire_feed import WireJobRepository
+from app.wire_feed.products import display_wire_product, normalize_wire_product
 
 router = APIRouter()
 
@@ -35,7 +36,12 @@ def _prune_pkce_store() -> None:
 
 
 def _autopost_status(profile: dict, recent_failed: int) -> str:
-    if not profile.get("x_connected") or not profile.get("display_name"):
+    if (
+        not profile.get("x_connected")
+        or not profile.get("display_name")
+        or not profile.get("openai_configured")
+        or not profile.get("tavily_configured")
+    ):
         return "setup_required"
     if recent_failed > 0 and profile.get("auto_post_enabled"):
         return "needs_attention"
@@ -59,10 +65,11 @@ def _autopost_dashboard_payload(db: Session, viewer: ViewerContext) -> dict:
             "source_title": candidate.title,
             "ticker": candidate.ticker,
             "source_name": candidate.source_name,
+            "product": str((candidate.raw_payload or {}).get("product") or normalize_wire_product(profile_payload.get("wire_product"))),
             "source_family": str((candidate.raw_payload or {}).get("source_family") or "base"),
             "lane": (candidate.raw_payload or {}).get("lane"),
         }
-        for candidate, job in job_repo.list_upcoming(limit=3)
+        for candidate, job in job_repo.list_upcoming(limit=3, customer_profile_id=profile.id)
     ]
     recent_posts = [
         {
@@ -73,16 +80,22 @@ def _autopost_dashboard_payload(db: Session, viewer: ViewerContext) -> dict:
             "source_title": candidate.title if candidate else None,
             "ticker": candidate.ticker if candidate else None,
             "source_name": candidate.source_name if candidate else None,
+            "product": str(((candidate.raw_payload or {}) if candidate else {}).get("product") or normalize_wire_product(profile_payload.get("wire_product"))),
             "source_family": str(((candidate.raw_payload or {}) if candidate else {}).get("source_family") or "base"),
             "lane": ((candidate.raw_payload or {}) if candidate else {}).get("lane"),
             "x_url": f"https://x.com/i/web/status/{log.platform_post_id}" if log.platform_post_id else None,
         }
-        for log, _job, candidate in job_repo.list_logs_with_candidates_recent(limit=10)
+        for log, _job, candidate in job_repo.list_logs_with_candidates_recent(limit=10, customer_profile_id=profile.id)
     ]
-    recent_failed = job_repo.count_recent_failed(now - timedelta(hours=24))
+    recent_failed = job_repo.count_recent_failed(now - timedelta(hours=24), customer_profile_id=profile.id)
     return {
         "display_name": profile_payload.get("display_name"),
+        "wire_product": normalize_wire_product(profile_payload.get("wire_product")),
+        "wire_product_label": display_wire_product(profile_payload.get("wire_product")),
         "x_connected": profile_payload.get("x_connected"),
+        "openai_configured": profile_payload.get("openai_configured"),
+        "tavily_configured": profile_payload.get("tavily_configured"),
+        "publishing_ready": profile_payload.get("publishing_ready"),
         "autopost_enabled": profile.auto_post_enabled,
         "status": _autopost_status(profile_payload, recent_failed),
         "posting_window": {"start_hour": 0, "end_hour": 0, "timezone": "Asia/Kolkata"},
@@ -143,7 +156,7 @@ def resume_autopost(
         raise HTTPException(status_code=403, detail="Customer access required")
     repo = CustomerProfileRepository(db)
     profile = repo.get_or_create_for_workspace_user(viewer.workspace_user_id, default_display_name=viewer.display_name)
-    if not profile.display_name or not (profile.token_store or {}).get("x_access_token"):
+    if not repo.has_required_integrations(profile) or not profile.display_name:
         raise HTTPException(status_code=409, detail="Complete setup before starting autoposting")
     profile.auto_post_enabled = True
     db.commit()
@@ -164,9 +177,24 @@ def update_profile_settings(
         viewer.workspace_user_id,
         default_display_name=viewer.display_name,
     )
-    allowed_keys = {"display_name", "auto_post_enabled"}
+    allowed_keys = {"display_name", "auto_post_enabled", "wire_product"}
     update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
+    token_updates: dict[str, str] = {}
+    if payload.openai_api_key is not None:
+        normalized = payload.openai_api_key.strip()
+        if normalized:
+            token_updates["openai_api_key"] = normalized
+    if payload.tavily_api_key is not None:
+        normalized = payload.tavily_api_key.strip()
+        if normalized:
+            token_updates["tavily_api_key"] = normalized
+    if "wire_product" in update_payload:
+        update_payload["wire_product"] = normalize_wire_product(update_payload["wire_product"])
     updated = repo.update(settings, update_payload)
+    if token_updates:
+        store = dict(updated.token_store or {})
+        store.update(token_updates)
+        updated.token_store = store
     db.commit()
     return JSONResponse(content=updated.to_dict())
 
@@ -235,7 +263,7 @@ def x_oauth_callback(
 ) -> RedirectResponse:
     """X OAuth 2.0 callback — exchanges code for tokens, stores them, redirects to frontend."""
     cfg = get_settings()
-    frontend_settings = f"{cfg.frontend_url.rstrip('/')}/settings"
+    frontend_settings = f"{cfg.frontend_url.rstrip('/')}/autopost"
 
     if error:
         return RedirectResponse(url=f"{frontend_settings}?x_error={error}")

@@ -50,14 +50,21 @@ class CustomerProfileRepository:
         return list(self.db.scalars(stmt))
 
     def has_active_autopost_customer(self) -> bool:
-        stmt = select(CustomerProfile).where(CustomerProfile.auto_post_enabled.is_(True))
-        profiles = list(self.db.scalars(stmt))
-        return any(bool((profile.token_store or {}).get("x_access_token")) for profile in profiles)
+        return bool(self.list_active_autopost_customers())
 
     def get_active_autopost_customer(self) -> CustomerProfile | None:
+        profiles = self.list_active_autopost_customers()
+        return profiles[0] if profiles else None
+
+    def list_active_autopost_customers(self) -> list[CustomerProfile]:
         stmt = select(CustomerProfile).where(CustomerProfile.auto_post_enabled.is_(True))
         profiles = list(self.db.scalars(stmt))
-        for profile in profiles:
-            if bool((profile.token_store or {}).get("x_access_token")):
-                return profile
-        return None
+        return [profile for profile in profiles if self.has_required_integrations(profile)]
+
+    def has_required_integrations(self, profile: CustomerProfile) -> bool:
+        store = profile.token_store or {}
+        return bool(
+            store.get("x_access_token")
+            and store.get("openai_api_key")
+            and store.get("tavily_api_key")
+        )

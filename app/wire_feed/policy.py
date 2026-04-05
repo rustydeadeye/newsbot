@@ -9,6 +9,7 @@ from app.wire_feed.pipeline import WirePipelineResult
 
 @dataclass(frozen=True)
 class WireFeedSettings:
+    product: str = "finance"
     max_posts_per_hour: int = 2
     max_posts_per_day: int = 15
     base_max_posts_per_day: int = 5
@@ -138,6 +139,12 @@ def plan_wire_queue(
 
 
 def _priority_bucket(candidate: WirePipelineResult) -> str:
+    if candidate.product == "ai":
+        if candidate.event_type in {"policy_regulation", "security_incident"}:
+            return "breaking"
+        if candidate.event_type in {"model_launch", "api_update"} or candidate.importance_score >= 88:
+            return "high"
+        return "normal"
     if candidate.event_type in {"rbi_policy", "rbi_penalty", "sebi_circular", "sebi_enforcement", "default_fraud"}:
         return "breaking"
     if candidate.importance_score >= 85:
@@ -204,7 +211,11 @@ def _is_duplicate_recent(
     settings: WireFeedSettings,
 ) -> bool:
     cutoff = now - timedelta(minutes=settings.duplicate_cooldown_minutes)
-    return any(record.dedupe_key == dedupe_key and record.posted_at >= cutoff for record in records)
+    legacy_key = dedupe_key.removeprefix("finance|")
+    return any(
+        record.posted_at >= cutoff and record.dedupe_key in {dedupe_key, legacy_key}
+        for record in records
+    )
 
 
 def _count_since(records: list[WirePostRecord], cutoff: datetime) -> int:
@@ -224,7 +235,7 @@ def _family_daily_limit(source_family: str, settings: WireFeedSettings) -> int:
 def _wire_dedupe_key(candidate: WirePipelineResult) -> str:
     ticker = (candidate.ticker or "market").lower()
     subject = (candidate.subject_key or candidate.title).lower()
-    return f"{candidate.event_type}|{ticker}|{subject}"
+    return f"{candidate.product}|{candidate.event_type}|{ticker}|{subject}"
 
 
 def _in_quiet_hours(current: datetime, settings: WireFeedSettings) -> bool:

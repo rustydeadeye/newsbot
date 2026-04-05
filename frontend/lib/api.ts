@@ -14,6 +14,9 @@ type FetchJsonOptions = RequestInit & {
 type ProfileSettingsUpdate = {
   display_name?: string;
   auto_post_enabled?: boolean;
+  wire_product?: "finance" | "ai";
+  openai_api_key?: string;
+  tavily_api_key?: string;
 };
 
 async function getAccessToken(accessToken?: string | null) {
@@ -100,7 +103,14 @@ export function disconnectXAccount() {
 }
 
 export function updateProfileSettings(payload: ProfileSettingsUpdate) {
-  return fetchJson<{ display_name: string | null; auto_post_enabled?: boolean }>("/settings/profile", {
+  return fetchJson<{
+    display_name: string | null;
+    auto_post_enabled?: boolean;
+    openai_configured?: boolean;
+    tavily_configured?: boolean;
+    x_connected?: boolean;
+    publishing_ready?: boolean;
+  }>("/settings/profile", {
     method: "PUT",
     body: JSON.stringify(payload)
   });

@@ -17,6 +17,28 @@ const WIRE_REASON_LABELS: Record<string, string> = {
   manual_retry: "Queued again by admin",
 };
 
+function formatPipelineLabel(product?: string, sourceFamily?: string, lane?: string | null, sourceName?: string) {
+  if (sourceFamily === "web") {
+    if (product === "ai") {
+      if (lane === "product_updates") return "AI web / products";
+      if (lane === "industry_moves") return "AI web / industry";
+      if (lane === "policy_regulation") return "AI web / policy";
+      return "AI web";
+    }
+    if (lane === "india_preopen") return "Finance web / preopen";
+    if (lane === "india_close") return "Finance web / close";
+    if (lane === "global_impact") return "Finance web / global";
+    return "Finance web";
+  }
+  if (product === "ai") return "AI base";
+  if (sourceName === "tradient_market_news") return "Tradient";
+  return "Finance base";
+}
+
+function formatProductLabel(product?: string) {
+  return product === "ai" ? "AI" : "Finance";
+}
+
 export function WireFeedQueuePanel({
   jobs: initialJobs,
   logs
@@ -63,11 +85,14 @@ export function WireFeedQueuePanel({
   return (
     <div className="publishing-layout">
       <div className="panel">
-        <div className="section-title">Wire feed queue</div>
+        <div className="section-title">Scheduled queue</div>
+        <div className="card-subtle">Everything waiting to publish next, with the product and pipeline that created it.</div>
         <div className="log-list">
-          {jobs.length === 0 ? <div className="empty">No wire-feed jobs yet.</div> : null}
+          {jobs.length === 0 ? <div className="empty">No jobs are waiting right now. When new posts are approved, they will appear here.</div> : null}
           {jobs.map((job) => {
             const message = job.result_message ? (WIRE_REASON_LABELS[job.result_message] ?? job.result_message) : null;
+            const product = job.candidate?.product;
+            const sourceFamily = job.candidate?.source_family;
             return (
               <div key={job.id} className={`publish-row${job.status === "failed" ? " failed" : ""}`}>
                 <div className="row space">
@@ -81,7 +106,12 @@ export function WireFeedQueuePanel({
                       {job.status}
                     </span>
                     <span className="pill">{job.priority}</span>
+                    <span className="pill subtle">{formatProductLabel(product)}</span>
+                    <span className="pill subtle">{sourceFamily === "web" ? "Web" : "Base"}</span>
                     <span className="mono">{job.candidate?.ticker ?? "MARKET"}</span>
+                    <span className="card-subtle">
+                      {formatPipelineLabel(product, sourceFamily, job.candidate?.lane, job.candidate?.source_name)}
+                    </span>
                   </div>
                   <span className="card-subtle">attempts {job.attempt_count}</span>
                 </div>
@@ -113,13 +143,21 @@ export function WireFeedQueuePanel({
         </div>
       </div>
       <div className="panel">
-        <div className="section-title">Recent wire posting outcomes</div>
+        <div className="section-title">Recent published posts</div>
+        <div className="card-subtle">A simple log of what the runtime successfully pushed out most recently.</div>
         <div className="log-list">
-          {logs.length === 0 ? <div className="empty">No wire publish logs yet.</div> : null}
+          {logs.length === 0 ? <div className="empty">No published posts yet. Successful posts will appear here with their product and pipeline labels.</div> : null}
           {logs.map((log) => (
             <div key={log.id} className="publish-log-row">
               <div className="row space">
-                <span className="pill">posted</span>
+                <div className="row">
+                  <span className="pill">posted</span>
+                  <span className="pill subtle">{formatProductLabel(log.candidate?.product)}</span>
+                  <span className="pill subtle">{log.candidate?.source_family === "web" ? "Web" : "Base"}</span>
+                  <span className="card-subtle">
+                    {formatPipelineLabel(log.candidate?.product, log.candidate?.source_family, log.candidate?.lane, log.candidate?.source_name)}
+                  </span>
+                </div>
                 <span className="mono">{log.platform_post_id ?? "no-platform-id"}</span>
               </div>
               <div className="queue-row-title">{log.candidate?.draft_text ?? log.candidate?.title ?? "Unknown wire post"}</div>

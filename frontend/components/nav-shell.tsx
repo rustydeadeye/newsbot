@@ -29,8 +29,8 @@ export function NavShell({
           <h1>Newsbot</h1>
           <p>
             {viewer.role === "admin"
-              ? "Monitor pipeline health, publishing readiness, and customer-facing output."
-              : "Review what matters, refine the draft, and move content forward with confidence."}
+              ? "Monitor live queues, publishing health, and customer-facing output across every product."
+              : "Set up autoposting, follow what is scheduled next, and keep your feed running with confidence."}
           </p>
         </div>
       </div>

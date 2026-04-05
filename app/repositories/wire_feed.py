@@ -14,10 +14,11 @@ class WireCandidateRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def upsert_from_result(self, result: WirePipelineResult) -> WireCandidate:
-        candidate = self.get_by_external_id(result.external_id)
+    def upsert_from_result(self, customer_profile_id: int, result: WirePipelineResult) -> WireCandidate:
+        candidate = self.get_by_external_id(customer_profile_id, result.external_id)
         if candidate is None:
             candidate = WireCandidate(
+                customer_profile_id=customer_profile_id,
                 source_name=result.source_name,
                 external_id=result.external_id,
                 title=result.title,
@@ -55,15 +56,23 @@ class WireCandidateRepository:
         self.db.flush()
         return candidate
 
-    def get_by_external_id(self, external_id: str) -> WireCandidate | None:
-        stmt = select(WireCandidate).where(WireCandidate.external_id == external_id).limit(1)
+    def get_by_external_id(self, customer_profile_id: int, external_id: str) -> WireCandidate | None:
+        stmt = (
+            select(WireCandidate)
+            .where(WireCandidate.customer_profile_id == customer_profile_id, WireCandidate.external_id == external_id)
+            .limit(1)
+        )
         return self.db.scalar(stmt)
 
-    def has_source_candidate_since(self, source_name: str, since: datetime) -> bool:
+    def has_source_candidate_since(self, customer_profile_id: int, source_name: str, since: datetime) -> bool:
         stmt = (
             select(func.count())
             .select_from(WireCandidate)
-            .where(WireCandidate.source_name == source_name, WireCandidate.created_at >= since)
+            .where(
+                WireCandidate.customer_profile_id == customer_profile_id,
+                WireCandidate.source_name == source_name,
+                WireCandidate.created_at >= since,
+            )
         )
         count = self.db.scalar(stmt)
         return bool(count)
@@ -85,25 +94,33 @@ class WireJobRepository:
     def get(self, job_id: int) -> WireJob | None:
         return self.db.get(WireJob, job_id)
 
-    def list_recent(self, limit: int = 50) -> list[WireJob]:
-        stmt = select(WireJob).order_by(WireJob.updated_at.desc(), WireJob.id.desc()).limit(limit)
+    def list_recent(self, limit: int = 50, customer_profile_id: int | None = None) -> list[WireJob]:
+        stmt = select(WireJob)
+        if customer_profile_id is not None:
+            stmt = stmt.join(WireCandidate, WireCandidate.id == WireJob.candidate_id).where(
+                WireCandidate.customer_profile_id == customer_profile_id
+            )
+        stmt = stmt.order_by(WireJob.updated_at.desc(), WireJob.id.desc()).limit(limit)
         return list(self.db.scalars(stmt))
 
-    def list_upcoming(self, limit: int = 3) -> list[tuple[WireCandidate, WireJob]]:
+    def list_upcoming(self, limit: int = 3, customer_profile_id: int | None = None) -> list[tuple[WireCandidate, WireJob]]:
         stmt: Select[tuple[WireCandidate, WireJob]] = (
             select(WireCandidate, WireJob)
             .join(WireJob, WireJob.candidate_id == WireCandidate.id)
             .where(WireJob.status.in_(("queued", "publishing")))
-            .order_by(func.coalesce(WireJob.scheduled_for, WireJob.updated_at).asc(), WireJob.id.asc())
-            .limit(limit)
         )
+        if customer_profile_id is not None:
+            stmt = stmt.where(WireCandidate.customer_profile_id == customer_profile_id)
+        stmt = stmt.order_by(func.coalesce(WireJob.scheduled_for, WireJob.updated_at).asc(), WireJob.id.asc()).limit(limit)
         return list(self.db.execute(stmt).all())
 
-    def count_recent_failed(self, since: datetime) -> int:
-        stmt = select(func.count()).select_from(WireJob).where(
-            WireJob.status == "failed",
-            WireJob.updated_at >= since,
-        )
+    def count_recent_failed(self, since: datetime, customer_profile_id: int | None = None) -> int:
+        stmt = select(func.count()).select_from(WireJob)
+        if customer_profile_id is not None:
+            stmt = stmt.join(WireCandidate, WireCandidate.id == WireJob.candidate_id).where(
+                WireCandidate.customer_profile_id == customer_profile_id
+            )
+        stmt = stmt.where(WireJob.status == "failed", WireJob.updated_at >= since)
         count = self.db.scalar(stmt)
         return int(count or 0)
 
@@ -141,7 +158,7 @@ class WireJobRepository:
         self.db.flush()
         return job
 
-    def bump_non_breaking_queue(self, earliest: datetime, settings: WireFeedSettings) -> int:
+    def bump_non_breaking_queue(self, earliest: datetime, settings: WireFeedSettings, customer_profile_id: int | None = None) -> int:
         stmt: Select[tuple[WireJob, WireCandidate]] = (
             select(WireJob, WireCandidate)
             .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
@@ -153,6 +170,8 @@ class WireJobRepository:
             )
             .order_by(WireJob.scheduled_for.asc(), WireJob.id.asc())
         )
+        if customer_profile_id is not None:
+            stmt = stmt.where(WireCandidate.customer_profile_id == customer_profile_id)
         rows = list(self.db.execute(stmt).all())
         if not rows:
             return 0
@@ -170,11 +189,12 @@ class WireJobRepository:
         self.db.flush()
         return bumped
 
-    def recent_post_records(self, since: datetime) -> list[WirePostRecord]:
+    def recent_post_records(self, since: datetime, customer_profile_id: int) -> list[WirePostRecord]:
         stmt: Select[tuple[WireCandidate, WireJob]] = (
             select(WireCandidate, WireJob)
             .join(WireJob, WireJob.candidate_id == WireCandidate.id)
             .where(
+                WireCandidate.customer_profile_id == customer_profile_id,
                 WireJob.status.in_(("queued", "posted", "publishing")),
                 func.coalesce(WireJob.scheduled_for, WireJob.updated_at) >= since,
             )
@@ -193,12 +213,14 @@ class WireJobRepository:
             for candidate, job in rows
         ]
 
-    def expire_stale_jobs(self, now: datetime, settings: WireFeedSettings) -> int:
+    def expire_stale_jobs(self, now: datetime, settings: WireFeedSettings, customer_profile_id: int | None = None) -> int:
         stmt: Select[tuple[WireJob, WireCandidate]] = (
             select(WireJob, WireCandidate)
             .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
             .where(WireJob.status == "queued")
         )
+        if customer_profile_id is not None:
+            stmt = stmt.where(WireCandidate.customer_profile_id == customer_profile_id)
         rows = list(self.db.execute(stmt).all())
         expired = 0
         for job, candidate in rows:
@@ -214,14 +236,17 @@ class WireJobRepository:
             self.db.flush()
         return expired
 
-    def claim_ready(self, now: datetime, limit: int = 20) -> list[WireJob]:
+    def claim_ready(self, now: datetime, limit: int = 20, customer_profile_id: int | None = None) -> list[WireJob]:
         stmt = (
             select(WireJob)
+            .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
             .where(WireJob.status == "queued", WireJob.scheduled_for.is_not(None), WireJob.scheduled_for <= now)
             .order_by(WireJob.scheduled_for.asc(), WireJob.id.asc())
             .with_for_update(skip_locked=True)
-            .limit(limit)
         )
+        if customer_profile_id is not None:
+            stmt = stmt.where(WireCandidate.customer_profile_id == customer_profile_id)
+        stmt = stmt.limit(limit)
         jobs = list(self.db.scalars(stmt))
         for job in jobs:
             job.status = "publishing"
@@ -229,7 +254,7 @@ class WireJobRepository:
         self.db.flush()
         return jobs
 
-    def has_active_duplicate(self, dedupe_key: str, exclude_job_id: int | None = None) -> bool:
+    def has_active_duplicate(self, dedupe_key: str, exclude_job_id: int | None = None, customer_profile_id: int | None = None) -> bool:
         stmt = (
             select(func.count())
             .select_from(WireJob)
@@ -239,6 +264,8 @@ class WireJobRepository:
                 WireJob.status.in_(("queued", "publishing", "posted")),
             )
         )
+        if customer_profile_id is not None:
+            stmt = stmt.where(WireCandidate.customer_profile_id == customer_profile_id)
         if exclude_job_id is not None:
             stmt = stmt.where(WireJob.id != exclude_job_id)
         count = self.db.scalar(stmt)
@@ -255,18 +282,26 @@ class WireJobRepository:
         self.db.flush()
         return log
 
-    def list_logs_recent(self, limit: int = 50) -> list[WirePublishLog]:
-        stmt = select(WirePublishLog).order_by(WirePublishLog.posted_at.desc(), WirePublishLog.id.desc()).limit(limit)
+    def list_logs_recent(self, limit: int = 50, customer_profile_id: int | None = None) -> list[WirePublishLog]:
+        stmt = select(WirePublishLog)
+        if customer_profile_id is not None:
+            stmt = (
+                stmt.join(WireJob, WireJob.id == WirePublishLog.wire_job_id)
+                .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
+                .where(WireCandidate.customer_profile_id == customer_profile_id)
+            )
+        stmt = stmt.order_by(WirePublishLog.posted_at.desc(), WirePublishLog.id.desc()).limit(limit)
         return list(self.db.scalars(stmt))
 
-    def list_logs_with_candidates_recent(self, limit: int = 10) -> list[tuple[WirePublishLog, WireJob | None, WireCandidate | None]]:
+    def list_logs_with_candidates_recent(self, limit: int = 10, customer_profile_id: int | None = None) -> list[tuple[WirePublishLog, WireJob | None, WireCandidate | None]]:
         stmt = (
             select(WirePublishLog, WireJob, WireCandidate)
             .join(WireJob, WireJob.id == WirePublishLog.wire_job_id)
             .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
-            .order_by(WirePublishLog.posted_at.desc(), WirePublishLog.id.desc())
-            .limit(limit)
         )
+        if customer_profile_id is not None:
+            stmt = stmt.where(WireCandidate.customer_profile_id == customer_profile_id)
+        stmt = stmt.order_by(WirePublishLog.posted_at.desc(), WirePublishLog.id.desc()).limit(limit)
         return list(self.db.execute(stmt).all())
 
 

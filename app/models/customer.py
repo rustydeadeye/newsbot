@@ -19,6 +19,7 @@ class CustomerProfile(Base, TimestampMixin):
     watchlist: Mapped[list[str]] = mapped_column(JSON_VARIANT, default=list)
     blocked_phrases: Mapped[list[str]] = mapped_column(JSON_VARIANT, default=list)
     token_store: Mapped[dict] = mapped_column(JSON_VARIANT, default=dict)
+    wire_product: Mapped[str] = mapped_column(String(30), default="finance")
     automation_mode: Mapped[str] = mapped_column(String(60), default="auto_generate_manual_review")
     freshness_window_hours: Mapped[int] = mapped_column(Integer, default=12)
     max_posts_per_hour: Mapped[int] = mapped_column(Integer, default=6)
@@ -40,6 +41,7 @@ class CustomerProfile(Base, TimestampMixin):
             "primary_platform": "x",
             "tone": self.tone,
             "language": self.language,
+            "wire_product": self.wire_product,
             "automation_mode": self.automation_mode,
             "freshness_window_hours": self.freshness_window_hours,
             "max_posts_per_hour": self.max_posts_per_hour,
@@ -49,11 +51,12 @@ class CustomerProfile(Base, TimestampMixin):
             "posting_window_start": self.posting_window_start,
             "posting_window_end": self.posting_window_end,
             "openai_configured": bool(store.get("openai_api_key")),
+            "tavily_configured": bool(store.get("tavily_api_key")),
             "x_connected": bool(store.get("x_access_token")),
             "auto_post_enabled": self.auto_post_enabled,
             "auto_post_threshold": self.auto_post_threshold,
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "onboarding_completed": self.onboarding_completed_at is not None,
             "onboarding_completed_at": self.onboarding_completed_at.isoformat() if self.onboarding_completed_at else None,
-            "publishing_ready": bool(store.get("x_access_token")),
+            "publishing_ready": bool(store.get("x_access_token")) and bool(store.get("openai_api_key")) and bool(store.get("tavily_api_key")),
         }

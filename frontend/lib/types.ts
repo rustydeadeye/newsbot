@@ -83,6 +83,7 @@ export type PublishLog = {
 
 export type WireCandidateSummary = {
   id: number;
+  customer_profile_id?: number;
   source_name: string;
   external_id: string;
   title: string;
@@ -96,6 +97,9 @@ export type WireCandidateSummary = {
   last_action: string | null;
   last_reason: string | null;
   last_scheduled_for: string | null;
+  product?: string;
+  source_family?: string;
+  lane?: string | null;
 };
 
 export type WireJob = {
@@ -132,12 +136,16 @@ export type WirePublishLog = {
     ticker: string | null;
     draft_text: string;
     source_name: string;
+    product?: string;
+    source_family?: string;
+    lane?: string | null;
   } | null;
 };
 
 export type CreatorSettings = {
   id: number;
   display_name: string;
+  wire_product?: string;
   primary_platform: string;
   tone: string;
   language: string;
@@ -151,6 +159,7 @@ export type CreatorSettings = {
   posting_window_end: number | null;
   x_connected: boolean;
   openai_configured: boolean;
+  tavily_configured?: boolean;
   auto_post_enabled?: boolean;
   auto_post_threshold?: number;
   last_seen_at?: string | null;
@@ -165,6 +174,7 @@ export type OnboardingStatus = {
   watchlist: string[];
   blocked_phrases: string[];
   openai_configured: boolean;
+  tavily_configured?: boolean;
   x_connected: boolean;
   onboarding_completed: boolean;
   onboarding_completed_at: string | null;
@@ -175,7 +185,12 @@ export type OnboardingStatus = {
 
 export type AutopostDashboard = {
   display_name: string | null;
+  wire_product: string;
+  wire_product_label: string;
   x_connected: boolean;
+  openai_configured: boolean;
+  tavily_configured: boolean;
+  publishing_ready: boolean;
   autopost_enabled: boolean;
   status: "setup_required" | "paused" | "active" | "needs_attention";
   posting_window: {
@@ -197,6 +212,7 @@ export type AutopostDashboard = {
     source_title: string;
     ticker: string | null;
     source_name: string;
+    product: string;
     source_family: string;
     lane: string | null;
   }[];
@@ -208,6 +224,7 @@ export type AutopostDashboard = {
     source_title: string | null;
     ticker: string | null;
     source_name: string | null;
+    product: string;
     source_family: string;
     lane: string | null;
     x_url: string | null;

@@ -35,6 +35,7 @@ def list_wire_jobs(
                 "updated_at": job.updated_at.isoformat() if job.updated_at else None,
                 "candidate": {
                     "id": candidate.id,
+                    "customer_profile_id": candidate.customer_profile_id,
                     "source_name": candidate.source_name,
                     "external_id": candidate.external_id,
                     "title": candidate.title,
@@ -48,6 +49,9 @@ def list_wire_jobs(
                     "last_action": candidate.last_action,
                     "last_reason": candidate.last_reason,
                     "last_scheduled_for": candidate.last_scheduled_for.isoformat() if candidate.last_scheduled_for else None,
+                    "product": str((candidate.raw_payload or {}).get("product") or "finance"),
+                    "source_family": str((candidate.raw_payload or {}).get("source_family") or "base"),
+                    "lane": (candidate.raw_payload or {}).get("lane"),
                 } if candidate else None,
             }
         )
@@ -81,10 +85,14 @@ def list_wire_logs(
                 } if job else None,
                 "candidate": {
                     "id": candidate.id,
+                    "customer_profile_id": candidate.customer_profile_id,
                     "title": candidate.title,
                     "ticker": candidate.ticker,
                     "draft_text": candidate.draft_text,
                     "source_name": candidate.source_name,
+                    "product": str((candidate.raw_payload or {}).get("product") or "finance"),
+                    "source_family": str((candidate.raw_payload or {}).get("source_family") or "base"),
+                    "lane": (candidate.raw_payload or {}).get("lane"),
                 } if candidate else None,
             }
         )
@@ -123,6 +131,9 @@ def retry_wire_job(
             "title": candidate.title,
             "ticker": candidate.ticker,
             "draft_text": candidate.draft_text,
+            "product": str((candidate.raw_payload or {}).get("product") or "finance"),
+            "source_family": str((candidate.raw_payload or {}).get("source_family") or "base"),
+            "lane": (candidate.raw_payload or {}).get("lane"),
         } if candidate else None,
     }
 
@@ -156,5 +167,8 @@ def cancel_wire_job(
             "title": candidate.title,
             "ticker": candidate.ticker,
             "draft_text": candidate.draft_text,
+            "product": str((candidate.raw_payload or {}).get("product") or "finance"),
+            "source_family": str((candidate.raw_payload or {}).get("source_family") or "base"),
+            "lane": (candidate.raw_payload or {}).get("lane"),
         } if candidate else None,
     }

@@ -1,4 +1,5 @@
 PROMPT_VERSION = "v3"
+AI_WIRE_PROMPT_VERSION = "ai_v1"
 
 FACT_EXTRACTION_PROMPT = """
 Convert the source data into strict JSON with only facts supported by the input.
@@ -44,4 +45,26 @@ Preferred style examples:
 - Company filing: "APL Apollo Tubes: Q4FY26 sales volume 924,881 ton (+9% YoY); FY26 sales volume 3,491,243 ton (+11% YoY)."
 - Corporate action: "IRB Infra: bonus issue in a 1:1 ratio; ex-date March 30, 2026."
 - RBI penalty: "RBI imposes a monetary penalty on Airtel Payments Bank for non-compliance with directions."
+"""
+
+AI_WIRE_POST_PROMPT = """
+Write one short X post for a general-audience AI news feed using only the provided facts.
+
+Hard rules:
+- Maximum 240 characters for post_text.
+- Use plain English that a general reader can follow.
+- Keep concrete names, dates, prices, numbers, or limits when the facts provide them.
+- Say what changed first, then why it matters.
+- Sound like a sharp human explainer, not a robotic AI roundup.
+- No hashtags, no emojis, no source attribution, no filler.
+- Do not invent product capabilities, pricing, impact, or comparisons.
+- If the facts are too vague, set needs_review to true.
+
+Respond ONLY with valid JSON in this exact format:
+{
+  "post_text": "<the post, max 240 chars>",
+  "confidence": <float 0.0–1.0>,
+  "needs_review": <true or false>,
+  "review_reason": "<short reason string, or null>"
+}
 """

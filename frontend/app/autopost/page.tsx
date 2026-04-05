@@ -20,10 +20,10 @@ export default async function AutopostPage() {
       <div className="page-grid">
         <ShellHeader
           eyebrow="Autopost"
-          title="Autopost"
-          description="Connect X, turn autoposting on, and let Newsbot handle the ongoing posting flow."
+          title="Your autopost workspace"
+          description="Choose your news product, connect X, and let Newsbot handle the daily posting flow for you."
           viewer={viewer}
-          freshnessLabel="Simple wire-feed customer surface"
+          freshnessLabel="Live customer autopost"
         />
         <AdminApiErrorPanel
           title="Autopost unavailable"
@@ -37,13 +37,19 @@ export default async function AutopostPage() {
     <div className="page-grid">
       <ShellHeader
         eyebrow="Customer Autopost"
-        title="Autopost"
-        description="This branch keeps your posting flow simple: connect X, turn autoposting on, and follow what goes out next."
+        title="Your autopost workspace"
+        description="Track your live posting flow, see what is scheduled next, and keep your feed clear without digging through operator detail."
         viewer={viewer}
-        freshnessLabel="Simple wire-feed customer surface"
+        freshnessLabel="Live customer autopost"
       />
       {dashboard.status === "setup_required" ? (
-        <AutopostSetupPanel displayName={dashboard.display_name} xConnected={dashboard.x_connected} />
+        <AutopostSetupPanel
+          displayName={dashboard.display_name}
+          wireProduct={dashboard.wire_product}
+          xConnected={dashboard.x_connected}
+          openaiConfigured={dashboard.openai_configured}
+          tavilyConfigured={dashboard.tavily_configured}
+        />
       ) : (
         <AutopostDashboardPanel initialDashboard={dashboard} />
       )}

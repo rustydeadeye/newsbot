@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import get_settings
 from app.wire_feed.pipeline import WirePipelineResult
+from app.wire_feed.products import normalize_wire_product
 
 try:
     from openai import OpenAI
@@ -21,7 +22,7 @@ except Exception:  # pragma: no cover - optional dependency runtime guard
 logger = logging.getLogger(__name__)
 
 DISPLAY_TZ = ZoneInfo("Asia/Kolkata")
-REPUTABLE_DOMAINS = [
+FINANCE_REPUTABLE_DOMAINS = [
     "reuters.com",
     "bloomberg.com",
     "cnbctv18.com",
@@ -36,11 +37,32 @@ REPUTABLE_DOMAINS = [
     "finmin.gov.in",
     "mca.gov.in",
 ]
-RELIABLE_DOMAIN_KEYWORDS = tuple(domain.replace("www.", "") for domain in REPUTABLE_DOMAINS)
+AI_REPUTABLE_DOMAINS = [
+    "openai.com",
+    "anthropic.com",
+    "blog.google",
+    "deepmind.google",
+    "ai.meta.com",
+    "azure.microsoft.com",
+    "x.ai",
+    "mistral.ai",
+    "cohere.com",
+    "perplexity.ai",
+    "huggingface.co",
+    "reuters.com",
+    "techcrunch.com",
+    "theverge.com",
+    "wired.com",
+    "semafor.com",
+    "ft.com",
+    "bloomberg.com",
+]
+RELIABLE_DOMAIN_KEYWORDS = tuple(domain.replace("www.", "") for domain in (FINANCE_REPUTABLE_DOMAINS + AI_REPUTABLE_DOMAINS))
 
 
 @dataclass(frozen=True)
 class WebRunDef:
+    product: str
     key: str
     source_name: str
     lane: str
@@ -69,6 +91,7 @@ class ValidationResult:
 
 WEB_RUNS: tuple[WebRunDef, ...] = (
     WebRunDef(
+        product="finance",
         key="india_preopen",
         source_name="tavily_web_india_preopen",
         lane="india_preopen",
@@ -76,6 +99,7 @@ WEB_RUNS: tuple[WebRunDef, ...] = (
         local_minute=15,
     ),
     WebRunDef(
+        product="finance",
         key="india_close",
         source_name="tavily_web_india_close",
         lane="india_close",
@@ -83,19 +107,47 @@ WEB_RUNS: tuple[WebRunDef, ...] = (
         local_minute=45,
     ),
     WebRunDef(
+        product="finance",
         key="global_impact",
         source_name="tavily_web_global_impact",
         lane="global_impact",
         local_hour=21,
         local_minute=15,
     ),
+    WebRunDef(
+        product="ai",
+        key="product_updates",
+        source_name="tavily_ai_product_updates",
+        lane="product_updates",
+        local_hour=8,
+        local_minute=0,
+    ),
+    WebRunDef(
+        product="ai",
+        key="industry_moves",
+        source_name="tavily_ai_industry_moves",
+        lane="industry_moves",
+        local_hour=13,
+        local_minute=0,
+    ),
+    WebRunDef(
+        product="ai",
+        key="policy_regulation",
+        source_name="tavily_ai_policy_regulation",
+        lane="policy_regulation",
+        local_hour=20,
+        local_minute=0,
+    ),
 )
 
 
-def get_due_web_runs(now: datetime, has_run_since: callable) -> list[WebRunDef]:
+def get_due_web_runs(now: datetime, has_run_since: callable, *, product: str = "finance") -> list[WebRunDef]:
     local_now = now.astimezone(DISPLAY_TZ)
+    product = normalize_wire_product(product)
     due: list[WebRunDef] = []
     for run in WEB_RUNS:
+        if run.product != product:
+            continue
         local_start = local_now.replace(hour=run.local_hour, minute=run.local_minute, second=0, microsecond=0)
         if local_now < local_start:
             continue
@@ -105,26 +157,35 @@ def get_due_web_runs(now: datetime, has_run_since: callable) -> list[WebRunDef]:
     return due
 
 
-def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
+def fetch_web_breaking_candidates(
+    run: WebRunDef,
+    *,
+    openai_api_key: str | None = None,
+    tavily_api_key: str | None = None,
+) -> list[WirePipelineResult]:
     settings = get_settings()
     if not settings.wire_web_breaking_enabled:
         return []
-    if OpenAI is None or not settings.openai_api_key or not settings.tavily_api_key:
+    resolved_openai_key = openai_api_key or settings.openai_api_key
+    resolved_tavily_key = tavily_api_key or settings.tavily_api_key
+    if OpenAI is None or not resolved_openai_key or not resolved_tavily_key:
         logger.info("Tavily web breaking pipeline skipped: client or key missing")
         return []
 
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = OpenAI(api_key=resolved_openai_key)
     try:
         raw_items = _tavily_lane_results(
             lane=run.lane,
-            tavily_api_key=settings.tavily_api_key,
+            tavily_api_key=resolved_tavily_key,
             limit=settings.wire_web_breaking_limit,
             hours=settings.wire_web_breaking_freshness_hours,
+            product=run.product,
         )
     except Exception as exc:
         logger.warning("Tavily web breaking research failed for %s: %s", run.key, exc)
         return [
             WirePipelineResult(
+                product=run.product,
                 external_id=f"{run.source_name}:fetch_error",
                 source_name=run.source_name,
                 source_family="web",
@@ -139,7 +200,7 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
                 review_reason="fetch_error",
                 draft_text="",
                 safety_flags={"fetch_error": True},
-                raw_payload={"source_family": "web", "lane": run.lane},
+                raw_payload={"source_family": "web", "lane": run.lane, "product": run.product},
                 published_at=None,
                 fetch_error=f"{type(exc).__name__}: {exc}",
             )
@@ -147,7 +208,7 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
     seen_keys: set[str] = set()
     candidates: list[tuple[WebCandidate, ValidationResult]] = []
     for raw in raw_items:
-        candidate = _parse_candidate(raw)
+        candidate = _parse_candidate(raw, product=run.product)
         if candidate is None:
             continue
         fingerprint = f"{candidate.title.strip().lower()}|{candidate.source_url.strip().lower()}"
@@ -155,18 +216,18 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
             continue
         seen_keys.add(fingerprint)
 
-        validation = _validate_candidate(candidate, hours=settings.wire_web_breaking_freshness_hours)
+        validation = _validate_candidate(candidate, hours=settings.wire_web_breaking_freshness_hours, product=run.product)
         if not validation.approved:
             continue
         candidates.append((candidate, validation))
 
     results: list[WirePipelineResult] = []
-    for candidate, validation in _select_web_candidates(candidates, lane=run.lane):
-        if not _passes_lane_relevance_gate(candidate, lane=run.lane):
+    for candidate, validation in _select_web_candidates(candidates, lane=run.lane, product=run.product):
+        if not _passes_lane_relevance_gate(candidate, lane=run.lane, product=run.product):
             logger.info("Rejected Tavily candidate for lane mismatch: %s", candidate.title)
             continue
         try:
-            draft_text = _draft_tweet(client, model=settings.wire_web_breaking_model, candidate=candidate)
+            draft_text = _draft_tweet(client, model=settings.wire_web_breaking_model, candidate=candidate, product=run.product)
         except Exception as exc:
             logger.warning("OpenAI web breaking drafting failed for %s: %s", candidate.title, exc)
             continue
@@ -174,12 +235,13 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
             logger.info("Rejected Tavily draft for public-facing quality: %s", candidate.title)
             continue
 
-        event_type = _event_type_for_category(candidate.category, candidate.title, candidate.summary)
-        importance = _importance_score(candidate)
+        event_type = _event_type_for_category(candidate.category, candidate.title, candidate.summary, product=run.product)
+        importance = _importance_score(candidate, product=run.product)
         subject_key = _slug(candidate.title)[:120]
         published_at = validation.published_at
         results.append(
             WirePipelineResult(
+                product=run.product,
                 external_id=_external_id(run.source_name, candidate),
                 source_name=run.source_name,
                 source_family="web",
@@ -196,6 +258,7 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
                 safety_flags={"openai_web_breaking": True},
                 raw_payload={
                     "source_family": "web",
+                    "product": run.product,
                     "lane": run.lane,
                     "source_url": candidate.source_url,
                     "article_source_name": candidate.source_name,
@@ -211,16 +274,16 @@ def fetch_web_breaking_candidates(run: WebRunDef) -> list[WirePipelineResult]:
     return [_noop_result(run, reason="no_approved_candidates")]
 
 
-def _tavily_lane_results(*, lane: str, tavily_api_key: str, limit: int, hours: int) -> list[dict[str, Any]]:
+def _tavily_lane_results(*, lane: str, tavily_api_key: str, limit: int, hours: int, product: str = "finance") -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
-    for query in _lane_queries(lane):
+    for query in _lane_queries(lane, product=product):
         payload = _tavily_search(
             query=query,
             tavily_api_key=tavily_api_key,
             max_results=max(6, limit),
             days=max(2, hours // 24 + 1),
-            domains=_lane_domains(lane),
+            domains=_lane_domains(lane, product=product),
         )
         for item in payload.get("results") or []:
             url = str(item.get("url") or "").strip()
@@ -259,7 +322,25 @@ def _tavily_search(*, query: str, tavily_api_key: str, max_results: int, days: i
         return json.loads(resp.read().decode())
 
 
-def _lane_queries(lane: str) -> list[str]:
+def _lane_queries(lane: str, *, product: str = "finance") -> list[str]:
+    if product == "ai":
+        if lane == "product_updates":
+            return [
+                "latest AI model launches API pricing updates today OpenAI Anthropic Google Meta xAI Mistral Cohere Perplexity Hugging Face",
+                "AI product update today model release API change pricing context window latest",
+                "OpenAI Anthropic Google Meta AI release today latest official",
+            ]
+        if lane == "industry_moves":
+            return [
+                "AI partnerships acquisitions funding enterprise rollout latest today",
+                "AI company deal investment datacenter chips enterprise latest today",
+                "latest AI industry moves Reuters TechCrunch Verge today",
+            ]
+        return [
+            "AI policy regulation copyright export controls safety latest today",
+            "EU AI Act FTC White House AI policy latest today",
+            "latest AI regulation lawsuit policy Reuters today",
+        ]
     if lane == "india_preopen":
         return [
             "India markets pre-open today GIFT Nifty rupee RBI latest news",
@@ -282,7 +363,48 @@ def _lane_queries(lane: str) -> list[str]:
     ]
 
 
-def _lane_domains(lane: str) -> list[str]:
+def _lane_domains(lane: str, *, product: str = "finance") -> list[str]:
+    if product == "ai":
+        if lane == "product_updates":
+            return [
+                "openai.com",
+                "anthropic.com",
+                "blog.google",
+                "deepmind.google",
+                "ai.meta.com",
+                "azure.microsoft.com",
+                "x.ai",
+                "mistral.ai",
+                "cohere.com",
+                "perplexity.ai",
+                "huggingface.co",
+                "reuters.com",
+                "techcrunch.com",
+                "theverge.com",
+            ]
+        if lane == "industry_moves":
+            return [
+                "reuters.com",
+                "techcrunch.com",
+                "theverge.com",
+                "semafor.com",
+                "ft.com",
+                "bloomberg.com",
+                "openai.com",
+                "anthropic.com",
+                "azure.microsoft.com",
+            ]
+        return [
+            "reuters.com",
+            "ft.com",
+            "bloomberg.com",
+            "wired.com",
+            "theverge.com",
+            "techcrunch.com",
+            "openai.com",
+            "anthropic.com",
+            "blog.google",
+        ]
     if lane == "global_impact":
         return [
             "reuters.com",
@@ -334,8 +456,33 @@ def _is_obvious_junk(item: dict[str, Any]) -> bool:
     return any(term in text for term in blocked_terms)
 
 
-def _draft_tweet(client: OpenAI, *, model: str, candidate: WebCandidate) -> str:
-    prompt = f"""
+def _draft_tweet(client: OpenAI, *, model: str, candidate: WebCandidate, product: str = "finance") -> str:
+    if product == "ai":
+        prompt = f"""
+Write one factual AI news X post in plain public-facing language.
+
+Rules:
+- No hashtags
+- No emojis
+- No source attribution in the tweet body
+- Prefer 110-220 characters when supported by the facts
+- Explain what changed and why regular users, builders, or businesses should care
+- Keep concrete numbers, pricing, names, or limits when the facts provide them
+- Avoid unexplained jargon and benchmark shorthand
+- Sound human, not like an AI roundup bot
+- Do not invent facts
+
+Facts:
+Title: {candidate.title}
+Summary: {candidate.summary}
+Category: {candidate.category}
+Impact: {candidate.india_impact}
+Why it matters: {candidate.why_it_matters}
+
+Return only the tweet text.
+""".strip()
+    else:
+        prompt = f"""
 Write one factual finance-market X post in a dense but human-written style.
 
 Rules:
@@ -371,7 +518,7 @@ Return only the tweet text.
     return " ".join(response.output_text.split()).strip()
 
 
-def _parse_candidate(item: dict[str, Any]) -> WebCandidate | None:
+def _parse_candidate(item: dict[str, Any], *, product: str = "finance") -> WebCandidate | None:
     title = str(item.get("title") or "").strip()
     source_url = str(item.get("source_url") or item.get("url") or "").strip()
     if not title or not source_url:
@@ -379,9 +526,9 @@ def _parse_candidate(item: dict[str, Any]) -> WebCandidate | None:
     summary = str(item.get("summary") or item.get("content") or "").strip()
     source_name = str(item.get("source_name") or _source_name_from_url(source_url)).strip()
     published_at = str(item.get("published_at") or item.get("published_date") or "").strip()
-    category = str(item.get("category") or _infer_category(title, summary, source_url)).strip()
-    india_impact = str(item.get("india_impact") or _infer_india_impact(title, summary, category)).strip()
-    why_it_matters = str(item.get("why_it_matters") or _infer_why_it_matters(title, summary, category)).strip()
+    category = str(item.get("category") or _infer_category(title, summary, source_url, product=product)).strip()
+    india_impact = str(item.get("india_impact") or _infer_india_impact(title, summary, category, product=product)).strip()
+    why_it_matters = str(item.get("why_it_matters") or _infer_why_it_matters(title, summary, category, product=product)).strip()
     return WebCandidate(
         title=title,
         summary=summary,
@@ -404,7 +551,7 @@ def _parse_published_at(value: str) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _validate_candidate(candidate: WebCandidate, *, hours: int) -> ValidationResult:
+def _validate_candidate(candidate: WebCandidate, *, hours: int, product: str = "finance") -> ValidationResult:
     reasons: list[str] = []
     parsed_time = _parse_published_at(candidate.published_at)
     if parsed_time is not None:
@@ -413,7 +560,8 @@ def _validate_candidate(candidate: WebCandidate, *, hours: int) -> ValidationRes
             reasons.append(f"stale_{int(age.total_seconds() // 3600)}h")
 
     source_url_lower = candidate.source_url.lower()
-    if not any(domain in source_url_lower for domain in RELIABLE_DOMAIN_KEYWORDS):
+    domain_keywords = tuple(domain.replace("www.", "") for domain in (AI_REPUTABLE_DOMAINS if product == "ai" else FINANCE_REPUTABLE_DOMAINS))
+    if not any(domain in source_url_lower for domain in domain_keywords):
         reasons.append("untrusted_domain")
 
     text = " ".join(
@@ -425,9 +573,27 @@ def _validate_candidate(candidate: WebCandidate, *, hours: int) -> ValidationRes
             candidate.category.lower(),
         ]
     )
-    if not any(
-        term in text
-        for term in (
+    required_terms = (
+        "model",
+        "api",
+        "pricing",
+        "launch",
+        "anthropic",
+        "openai",
+        "google",
+        "meta",
+        "microsoft",
+        "xai",
+        "mistral",
+        "cohere",
+        "perplexity",
+        "hugging face",
+        "policy",
+        "regulation",
+        "copyright",
+        "enterprise",
+        "ai",
+    ) if product == "ai" else (
             "india",
             "indian",
             "bank",
@@ -450,15 +616,15 @@ def _validate_candidate(candidate: WebCandidate, *, hours: int) -> ValidationRes
             "yield",
             "fed",
         )
-    ):
-        reasons.append("weak_india_relevance")
+    if not any(term in text for term in required_terms):
+        reasons.append("weak_relevance")
     if any(term in text for term in ("horoscope", "astrology", "celebrity", "recipe", "cricket", "football")):
         reasons.append("junk_topic")
 
     return ValidationResult(approved=not reasons, reasons=reasons, published_at=parsed_time)
 
 
-def _importance_score(candidate: WebCandidate) -> int:
+def _importance_score(candidate: WebCandidate, *, product: str = "finance") -> int:
     text = " ".join(
         [
             candidate.title.lower(),
@@ -468,6 +634,15 @@ def _importance_score(candidate: WebCandidate) -> int:
             candidate.category.lower(),
         ]
     )
+    if product == "ai":
+        score = 82
+        if candidate.category in {"product_updates", "policy_regulation"}:
+            score += 7
+        if candidate.category == "industry_moves":
+            score += 4
+        if any(term in text for term in ("pricing", "api", "model", "launch", "copyright", "regulation", "partnership", "funding")):
+            score += 3
+        return min(score, 96)
     score = 84
     if candidate.category in {"macro_market", "geopolitics", "rates_fx", "policy_regulation"}:
         score += 5
@@ -484,13 +659,14 @@ def _select_web_candidates(
     candidates: list[tuple[WebCandidate, ValidationResult]],
     *,
     lane: str,
+    product: str = "finance",
     max_per_topic: int = 1,
     max_selected: int = 5,
 ) -> list[tuple[WebCandidate, ValidationResult]]:
     ordered = sorted(
         candidates,
         key=lambda item: (
-            _selection_score(item[0], lane=lane),
+            _selection_score(item[0], lane=lane, product=product),
             item[1].published_at or datetime.min.replace(tzinfo=timezone.utc),
         ),
         reverse=True,
@@ -513,11 +689,11 @@ def _select_web_candidates(
     return kept
 
 
-def _selection_score(candidate: WebCandidate, *, lane: str) -> int:
-    return _importance_score(candidate) + _lane_fit_bonus(candidate, lane=lane)
+def _selection_score(candidate: WebCandidate, *, lane: str, product: str = "finance") -> int:
+    return _importance_score(candidate, product=product) + _lane_fit_bonus(candidate, lane=lane, product=product)
 
 
-def _lane_fit_bonus(candidate: WebCandidate, lane: str) -> int:
+def _lane_fit_bonus(candidate: WebCandidate, lane: str, product: str = "finance") -> int:
     text = " ".join(
         [
             candidate.title.lower(),
@@ -528,6 +704,23 @@ def _lane_fit_bonus(candidate: WebCandidate, lane: str) -> int:
         ]
     )
     bonus = 0
+    if product == "ai":
+        if lane == "product_updates":
+            if any(term in text for term in ("launch", "model", "api", "pricing", "developer", "context window", "tool")):
+                bonus += 6
+            if any(term in text for term in ("lawsuit", "funding", "antitrust")):
+                bonus -= 4
+        elif lane == "industry_moves":
+            if any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "datacenter", "chips", "cloud")):
+                bonus += 6
+            if any(term in text for term in ("benchmark", "leaderboard", "paper")):
+                bonus -= 4
+        elif lane == "policy_regulation":
+            if any(term in text for term in ("policy", "regulation", "copyright", "lawsuit", "export control", "ai act", "ftc")):
+                bonus += 6
+            if any(term in text for term in ("pricing", "tool update", "rollout")):
+                bonus -= 4
+        return bonus
     if lane == "india_preopen":
         if any(term in text for term in ("gift nifty", "market open", "overnight", "wall street", "rupee", "rbi", "brent", "wti", "yield", "dollar")):
             bonus += 6
@@ -546,7 +739,7 @@ def _lane_fit_bonus(candidate: WebCandidate, lane: str) -> int:
     return bonus
 
 
-def _passes_lane_relevance_gate(candidate: WebCandidate, *, lane: str) -> bool:
+def _passes_lane_relevance_gate(candidate: WebCandidate, *, lane: str, product: str = "finance") -> bool:
     text = " ".join(
         [
             candidate.title.lower(),
@@ -556,6 +749,14 @@ def _passes_lane_relevance_gate(candidate: WebCandidate, *, lane: str) -> bool:
             candidate.why_it_matters.lower(),
         ]
     )
+    if product == "ai":
+        if lane == "product_updates":
+            return any(term in text for term in ("model", "api", "pricing", "release", "launch", "tool", "agent"))
+        if lane == "industry_moves":
+            return any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "chips", "cloud", "datacenter", "deal"))
+        if lane == "policy_regulation":
+            return any(term in text for term in ("policy", "regulation", "copyright", "lawsuit", "ai act", "ftc", "white house", "export control"))
+        return True
     if lane == "india_preopen":
         blocked = (
             "market close",
@@ -648,8 +849,20 @@ def _passes_public_quality_gate(draft_text: str) -> bool:
     return True
 
 
-def _event_type_for_category(category: str, title: str, summary: str) -> str:
+def _event_type_for_category(category: str, title: str, summary: str, *, product: str = "finance") -> str:
     text = f"{category} {title} {summary}".lower()
+    if product == "ai":
+        if any(term in text for term in ("policy", "regulation", "copyright", "lawsuit", "antitrust", "ftc", "ai act")):
+            return "policy_regulation"
+        if any(term in text for term in ("security", "safety issue", "breach", "outage")):
+            return "security_incident"
+        if any(term in text for term in ("api", "sdk", "pricing", "context window", "developer")):
+            return "api_update"
+        if any(term in text for term in ("launch", "release", "introduces", "rollout", "tool", "agent", "model")):
+            return "model_launch"
+        if any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "datacenter", "chips")):
+            return "industry_move"
+        return "product_update"
     if any(term in text for term in ("rbi", "sebi", "approval", "regulator", "policy")):
         return "rbi_policy"
     if any(term in text for term in ("oil", "tariff", "rupee", "yield", "rate", "inflation", "geopolitic", "hormuz")):
@@ -659,8 +872,18 @@ def _event_type_for_category(category: str, title: str, summary: str) -> str:
     return "macro_release"
 
 
-def _infer_category(title: str, summary: str, source_url: str) -> str:
+def _infer_category(title: str, summary: str, source_url: str, *, product: str = "finance") -> str:
     text = f"{title} {summary} {source_url}".lower()
+    if product == "ai":
+        if any(term in text for term in ("policy", "regulation", "copyright", "lawsuit", "ai act", "ftc", "export control")):
+            return "policy_regulation"
+        if any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "datacenter", "chips", "cloud")):
+            return "industry_moves"
+        if any(term in text for term in ("model", "api", "pricing", "tool", "agent", "release", "launch", "context window")):
+            return "product_updates"
+        if any(term in text for term in ("paper", "benchmark", "eval", "leaderboard", "research")):
+            return "research"
+        return "industry_moves"
     if any(term in text for term in ("rbi", "sebi", "regulator", "buyback", "policy", "approval", "nse", "bse")):
         return "policy_regulation"
     if any(term in text for term in ("rupee", "fx", "dollar", "yield", "bond", "repo", "rate")):
@@ -674,8 +897,16 @@ def _infer_category(title: str, summary: str, source_url: str) -> str:
     return "company_update"
 
 
-def _infer_india_impact(title: str, summary: str, category: str) -> str:
+def _infer_india_impact(title: str, summary: str, category: str, *, product: str = "finance") -> str:
     text = f"{title} {summary}".lower()
+    if product == "ai":
+        if category == "product_updates":
+            return "This matters if users, teams, or developers get new models, tools, prices, or limits to work with."
+        if category == "industry_moves":
+            return "This matters because big AI deals and rollouts often signal where money, talent, and product demand are heading."
+        if category == "policy_regulation":
+            return "This matters because AI rules can shape what companies can ship, how they train models, and what users can access."
+        return "This matters if it changes how fast AI products improve or reach more people."
     if category == "rates_fx":
         return "This can quickly affect the rupee, importer costs, bank treasury books and market sentiment in India."
     if category == "policy_regulation":
@@ -689,8 +920,16 @@ def _infer_india_impact(title: str, summary: str, category: str) -> str:
     return "This may matter to Indian markets if it changes sentiment, costs, regulation or company outlook."
 
 
-def _infer_why_it_matters(title: str, summary: str, category: str) -> str:
+def _infer_why_it_matters(title: str, summary: str, category: str, *, product: str = "finance") -> str:
     text = f"{title} {summary}".lower()
+    if product == "ai":
+        if category == "product_updates":
+            return "Product changes matter most when they alter capability, price, speed, or access."
+        if category == "industry_moves":
+            return "Industry moves show which AI products and business models are gaining traction."
+        if category == "policy_regulation":
+            return "Policy moves can reshape AI competition, training data, deployment rules, and product roadmaps."
+        return "This is useful if it changes what AI products can do or who can use them."
     if category == "rates_fx":
         return "Currency and rate moves often spill into banks, oil, IT, inflation expectations and foreign flows."
     if category == "policy_regulation":
@@ -743,6 +982,13 @@ def _topic_bucket(candidate: WebCandidate) -> str:
             candidate.why_it_matters.lower(),
         ]
     )
+    if any(term in text for term in ("openai", "anthropic", "google", "meta", "microsoft", "xai", "mistral", "cohere", "perplexity", "hugging face")):
+        if any(term in text for term in ("pricing", "api", "context window", "tool", "agent", "launch", "release")):
+            return "ai_product_company"
+        if any(term in text for term in ("policy", "copyright", "lawsuit", "ai act", "ftc")):
+            return "ai_policy_company"
+        if any(term in text for term in ("funding", "partnership", "acquisition", "enterprise", "chips", "cloud")):
+            return "ai_industry_company"
     if any(term in text for term in ("rupee", "usd/inr", "fx curbs", "speculative bets", "ndf", "dollar glut")):
         return "fx_rupee"
     if any(term in text for term in ("repo", "rate hike", "rbi policy", "inflation target", "stance change")):
@@ -763,6 +1009,7 @@ def _topic_bucket(candidate: WebCandidate) -> str:
 def _noop_result(run: WebRunDef, *, reason: str) -> WirePipelineResult:
     today = datetime.now(timezone.utc).astimezone(DISPLAY_TZ).strftime("%Y%m%d")
     return WirePipelineResult(
+        product=run.product,
         external_id=f"{run.source_name}:{today}:{reason}",
         source_name=run.source_name,
         source_family="web",
@@ -777,7 +1024,7 @@ def _noop_result(run: WebRunDef, *, reason: str) -> WirePipelineResult:
         review_reason=reason,
         draft_text="",
         safety_flags={reason: True},
-        raw_payload={"source_family": "web", "lane": run.lane},
+        raw_payload={"source_family": "web", "lane": run.lane, "product": run.product},
         published_at=None,
         fetch_error=reason,
     )
