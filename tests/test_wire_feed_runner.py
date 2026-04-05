@@ -74,6 +74,40 @@ def test_publish_due_jobs_requeues_runtime_errors_before_fail(monkeypatch) -> No
     assert job.last_error == "x_api_request_error:ConnectError"
 
 
+def test_apply_customer_branding_appends_sebi_suffix() -> None:
+    from app.wire_feed.runner import _apply_customer_branding
+
+    result = type(
+        "Result",
+        (),
+        {
+            "draft_text": "Bank stocks fell after oil prices jumped and traders turned cautious.",
+            "raw_payload": {},
+        },
+    )()
+    profile = type(
+        "Profile",
+        (),
+        {
+            "display_name": "AngryTraders",
+            "token_store": {
+                "brand_name": "AngryTraders",
+                "sebi_registration": "INH000023506",
+                "cta_short": "Follow us and stay updated with stock reports and updates.",
+            },
+        },
+    )()
+
+    _apply_customer_branding([result], profile)
+
+    assert "AngryTraders | SEBI Registered RA (INH000023506)" in result.draft_text
+    assert "Follow us and stay updated with stock reports and updates." in result.draft_text
+    assert (
+        result.raw_payload["brand_suffix"]
+        == "AngryTraders | SEBI Registered RA (INH000023506)\nFollow us and stay updated with stock reports and updates."
+    )
+
+
 def test_publish_due_jobs_skips_active_duplicate(monkeypatch) -> None:
     from datetime import datetime, timezone
 

@@ -1,5 +1,5 @@
 PROMPT_VERSION = "v3"
-AI_WIRE_PROMPT_VERSION = "ai_v1"
+AI_WIRE_PROMPT_VERSION = "ai_v2"
 
 FACT_EXTRACTION_PROMPT = """
 Convert the source data into strict JSON with only facts supported by the input.
@@ -55,10 +55,12 @@ Hard rules:
 - Use plain English that a general reader can follow.
 - Keep concrete names, dates, prices, numbers, or limits when the facts provide them.
 - Say what changed first, then why it matters.
+- Explain who it affects when the facts make that clear.
 - Sound like a sharp human explainer, not a robotic AI roundup.
 - No hashtags, no emojis, no source attribution, no filler.
 - Do not invent product capabilities, pricing, impact, or comparisons.
-- If the facts are too vague, set needs_review to true.
+- Avoid vague phrasing like "signals momentum", "reflects growing interest", or generic AI commentary.
+- If the facts are too vague, do not guess. Set needs_review to true.
 
 Respond ONLY with valid JSON in this exact format:
 {

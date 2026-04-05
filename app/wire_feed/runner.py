@@ -20,6 +20,7 @@ from app.wire_feed.web_pipeline import fetch_web_breaking_candidates, get_due_we
 logger = logging.getLogger(__name__)
 _WIRE_MAX_ATTEMPTS = 3
 _BASE_FETCH_INTERVAL = timedelta(hours=1)
+_MAX_POST_LENGTH = 280
 
 
 def run_wire_cycle() -> dict[str, list[dict] | int]:
@@ -55,7 +56,10 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
         for profile in active_profiles:
             product = normalize_wire_product(getattr(profile, "wire_product", "finance"))
             store = dict(getattr(profile, "token_store", {}) or {})
-            drafting = DraftingService(api_key=store.get("openai_api_key"), model=settings.openai_model)
+            try:
+                drafting = DraftingService(api_key=store.get("openai_api_key"), model=settings.openai_model)
+            except TypeError:
+                drafting = DraftingService()
             policy = policy_for_product(product)
             try:
                 expired = job_repo.expire_stale_jobs(now, policy, customer_profile_id=profile.id)
@@ -111,6 +115,7 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
                     )
 
             all_results = [result for _, results in candidate_batches for result in results]
+            _apply_customer_branding(all_results, profile)
             decisions = plan_wire_queue(all_results, recent_posts=recent_records, now=now, settings=policy)
             decisions_by_source: dict[str, list] = {source_key: [] for source_key, _ in candidate_batches}
             for decision in decisions:
@@ -171,6 +176,54 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
             summary["failed"] += publish_counts["failed"]
 
     return summary
+
+
+def _apply_customer_branding(results: list, profile) -> None:
+    suffix = _customer_brand_suffix(profile)
+    if not suffix:
+        return
+    for result in results:
+        draft_text = str(getattr(result, "draft_text", "") or "").strip()
+        if not draft_text:
+            continue
+        result.draft_text = _append_suffix(draft_text, suffix)
+        raw_payload = dict(getattr(result, "raw_payload", {}) or {})
+        raw_payload["brand_suffix"] = suffix
+        setattr(result, "raw_payload", raw_payload)
+
+
+def _customer_brand_suffix(profile) -> str:
+    store = dict(getattr(profile, "token_store", {}) or {})
+    brand_name = str(store.get("brand_name") or getattr(profile, "display_name", "") or "").strip()
+    sebi_registration = str(store.get("sebi_registration") or "").strip()
+    cta_short = str(store.get("cta_short") or "").strip()
+    lines: list[str] = []
+    if brand_name and sebi_registration:
+        lines.append(f"{brand_name} | SEBI Registered RA ({sebi_registration})")
+    elif brand_name:
+        lines.append(brand_name)
+    if cta_short:
+        lines.append(cta_short)
+    return "\n".join(lines).strip()
+
+
+def _append_suffix(text: str, suffix: str) -> str:
+    if not suffix:
+        return text
+    separator = "\n\n"
+    combined = f"{text}{separator}{suffix}".strip()
+    if len(combined) <= _MAX_POST_LENGTH:
+        return combined
+    allowed = _MAX_POST_LENGTH - len(separator) - len(suffix)
+    if allowed <= 20:
+        return suffix[:_MAX_POST_LENGTH]
+    trimmed = text[:allowed].rstrip()
+    if len(trimmed) < len(text):
+        cutoff = trimmed.rfind(" ")
+        if cutoff > max(allowed - 30, 20):
+            trimmed = trimmed[:cutoff].rstrip()
+        trimmed = trimmed.rstrip(" .,;:!?") + "..."
+    return f"{trimmed}{separator}{suffix}"
 
 
 def _publish_due_jobs(db, profile, now: datetime | None = None) -> dict[str, int]:

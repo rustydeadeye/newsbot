@@ -11,7 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.core.config import get_settings
-from app.wire_feed.pipeline import WirePipelineResult
+from app.wire_feed.pipeline import WirePipelineResult, ai_readiness_assessment
 from app.wire_feed.products import normalize_wire_product
 
 try:
@@ -206,6 +206,11 @@ def fetch_web_breaking_candidates(
             )
         ]
     seen_keys: set[str] = set()
+    raw_count = len(raw_items)
+    filtered_count = 0
+    drafted_count = 0
+    band_counts = {"A": 0, "B": 0, "C": 0}
+    skip_reasons: dict[str, int] = {}
     candidates: list[tuple[WebCandidate, ValidationResult]] = []
     for raw in raw_items:
         candidate = _parse_candidate(raw, product=run.product)
@@ -218,27 +223,48 @@ def fetch_web_breaking_candidates(
 
         validation = _validate_candidate(candidate, hours=settings.wire_web_breaking_freshness_hours, product=run.product)
         if not validation.approved:
+            filtered_count += 1
+            for reason in validation.reasons:
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
             continue
         candidates.append((candidate, validation))
 
     results: list[WirePipelineResult] = []
-    for candidate, validation in _select_web_candidates(candidates, lane=run.lane, product=run.product):
+    selected = _select_web_candidates(candidates, lane=run.lane, product=run.product)
+    for candidate, validation in selected:
         if not _passes_lane_relevance_gate(candidate, lane=run.lane, product=run.product):
             logger.info("Rejected Tavily candidate for lane mismatch: %s", candidate.title)
+            skip_reasons["lane_mismatch"] = skip_reasons.get("lane_mismatch", 0) + 1
             continue
         try:
             draft_text = _draft_tweet(client, model=settings.wire_web_breaking_model, candidate=candidate, product=run.product)
         except Exception as exc:
             logger.warning("OpenAI web breaking drafting failed for %s: %s", candidate.title, exc)
+            skip_reasons["draft_error"] = skip_reasons.get("draft_error", 0) + 1
             continue
-        if not _passes_public_quality_gate(draft_text):
+        drafted_count += 1
+        if not _passes_public_quality_gate(draft_text, candidate=candidate, product=run.product):
             logger.info("Rejected Tavily draft for public-facing quality: %s", candidate.title)
+            skip_reasons["draft_quality"] = skip_reasons.get("draft_quality", 0) + 1
             continue
 
         event_type = _event_type_for_category(candidate.category, candidate.title, candidate.summary, product=run.product)
         importance = _importance_score(candidate, product=run.product)
         subject_key = _slug(candidate.title)[:120]
         published_at = validation.published_at
+        if run.product == "ai":
+            band, readiness_reason = ai_readiness_assessment(
+                importance_score=importance,
+                confidence_score=0.9,
+                draft_text=draft_text,
+                title=candidate.title,
+                body_text=candidate.summary,
+                event_type=event_type,
+                review_reason=None,
+            )
+        else:
+            band, readiness_reason = "A", "live_finance_candidate"
+        band_counts[band] = band_counts.get(band, 0) + 1
         results.append(
             WirePipelineResult(
                 product=run.product,
@@ -252,13 +278,16 @@ def fetch_web_breaking_candidates(
                 ticker=None,
                 importance_score=importance,
                 confidence_score=0.9,
-                would_auto_post=True,
-                review_reason=None,
+                would_auto_post=band == "A",
+                review_reason=None if band != "C" else "quality_band_c",
                 draft_text=draft_text,
-                safety_flags={"openai_web_breaking": True},
+                safety_flags={"openai_web_breaking": True, "quality_band": band, "shadow_mode": run.product == "ai"},
                 raw_payload={
                     "source_family": "web",
                     "product": run.product,
+                    "shadow_mode": run.product == "ai",
+                    "quality_band": band,
+                    "readiness_reason": readiness_reason,
                     "lane": run.lane,
                     "source_url": candidate.source_url,
                     "article_source_name": candidate.source_name,
@@ -268,6 +297,17 @@ def fetch_web_breaking_candidates(
                 },
                 published_at=published_at,
             )
+        )
+    if run.product == "ai":
+        logger.info(
+            "AI web lane processed: lane=%s raw=%s post_filter=%s post_cluster=%s drafted=%s bands=%s skips=%s",
+            run.lane,
+            raw_count,
+            len(candidates),
+            len(selected),
+            drafted_count,
+            band_counts,
+            skip_reasons,
         )
     if results:
         return results
@@ -618,6 +658,30 @@ def _validate_candidate(candidate: WebCandidate, *, hours: int, product: str = "
         )
     if not any(term in text for term in required_terms):
         reasons.append("weak_relevance")
+    if product == "ai" and any(
+        term in text
+        for term in (
+            "horoscope",
+            "astrology",
+            "celebrity",
+            "recipe",
+            "sports",
+            "cricket",
+            "football",
+            "opinion",
+            "interview",
+            "podcast",
+            "recap",
+            "weekly roundup",
+            "how to use chatgpt",
+            "best prompts",
+        )
+    ):
+        reasons.append("junk_topic")
+    if product == "ai" and any(term in text for term in ("middle east", "iran", "ukraine", "tariff", "shipping", "petroleum", "military school", "deportees")) and not any(
+        term in text for term in ("ai", "model", "chip", "gpu", "export control", "copyright", "anthropic", "openai", "google", "meta", "microsoft", "claude", "gemini")
+    ):
+        reasons.append("off_brief_world_news")
     if any(term in text for term in ("horoscope", "astrology", "celebrity", "recipe", "cricket", "football")):
         reasons.append("junk_topic")
 
@@ -640,8 +704,10 @@ def _importance_score(candidate: WebCandidate, *, product: str = "finance") -> i
             score += 7
         if candidate.category == "industry_moves":
             score += 4
-        if any(term in text for term in ("pricing", "api", "model", "launch", "copyright", "regulation", "partnership", "funding")):
+        if any(term in text for term in ("pricing", "api", "model", "launch", "copyright", "regulation", "partnership", "funding", "developer", "context window", "acquisition", "enterprise")):
             score += 3
+        if any(term in text for term in ("opinion", "podcast", "interview", "research preview", "benchmark", "leaderboard")):
+            score -= 8
         return min(score, 96)
     score = 84
     if candidate.category in {"macro_market", "geopolitics", "rates_fx", "policy_regulation"}:
@@ -673,17 +739,27 @@ def _select_web_candidates(
     )
     kept: list[tuple[WebCandidate, ValidationResult]] = []
     topic_counts: dict[str, int] = {}
+    company_counts: dict[str, int] = {}
     seen_fingerprints: set[str] = set()
+    seen_clusters: set[str] = set()
     for candidate, validation in ordered:
         fingerprint = _candidate_fingerprint(candidate)
         if fingerprint in seen_fingerprints:
             continue
         topic = _topic_bucket(candidate)
+        cluster = _cluster_bucket(candidate, product=product)
+        if cluster in seen_clusters:
+            continue
         if topic_counts.get(topic, 0) >= max_per_topic:
+            continue
+        company = _primary_company(candidate)
+        if product == "ai" and company != "other" and company_counts.get(company, 0) >= 1:
             continue
         kept.append((candidate, validation))
         seen_fingerprints.add(fingerprint)
+        seen_clusters.add(cluster)
         topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        company_counts[company] = company_counts.get(company, 0) + 1
         if len(kept) >= max_selected:
             break
     return kept
@@ -706,19 +782,19 @@ def _lane_fit_bonus(candidate: WebCandidate, lane: str, product: str = "finance"
     bonus = 0
     if product == "ai":
         if lane == "product_updates":
-            if any(term in text for term in ("launch", "model", "api", "pricing", "developer", "context window", "tool")):
+            if any(term in text for term in ("launch", "model", "api", "pricing", "developer", "context window", "tool", "subscription", "pay extra", "feature", "rollout", "buys", "acquires", "expansion")):
                 bonus += 6
-            if any(term in text for term in ("lawsuit", "funding", "antitrust")):
+            if any(term in text for term in ("lawsuit", "funding", "antitrust", "pac", "political action committee", "deportees", "military school", "petroleum")):
                 bonus -= 4
         elif lane == "industry_moves":
-            if any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "datacenter", "chips", "cloud")):
+            if any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "datacenter", "chips", "cloud", "expansion", "executive shuffle", "leadership")):
                 bonus += 6
-            if any(term in text for term in ("benchmark", "leaderboard", "paper")):
+            if any(term in text for term in ("benchmark", "leaderboard", "paper", "opinion", "interview")):
                 bonus -= 4
         elif lane == "policy_regulation":
             if any(term in text for term in ("policy", "regulation", "copyright", "lawsuit", "export control", "ai act", "ftc")):
                 bonus += 6
-            if any(term in text for term in ("pricing", "tool update", "rollout")):
+            if any(term in text for term in ("pricing", "tool update", "rollout", "political action committee", "pac")):
                 bonus -= 4
         return bonus
     if lane == "india_preopen":
@@ -750,12 +826,68 @@ def _passes_lane_relevance_gate(candidate: WebCandidate, *, lane: str, product: 
         ]
     )
     if product == "ai":
+        ai_company_signal = any(
+            term in text
+            for term in (
+                "openai",
+                "anthropic",
+                "claude",
+                "google",
+                "gemini",
+                "deepmind",
+                "meta",
+                "microsoft",
+                "azure ai",
+                "xai",
+                "grok",
+                "mistral",
+                "cohere",
+                "perplexity",
+                "hugging face",
+            )
+        )
+        unrelated_world_news = any(
+            term in text
+            for term in (
+                "egypt says it held calls",
+                "kuwait petroleum",
+                "deportees",
+                "military school",
+                "drone attack",
+                "regional counterparts",
+            )
+        ) and not ai_company_signal
         if lane == "product_updates":
-            return any(term in text for term in ("model", "api", "pricing", "release", "launch", "tool", "agent"))
+            concrete_update = any(
+                term in text
+                for term in (
+                    "model",
+                    "api",
+                    "pricing",
+                    "release",
+                    "launch",
+                    "tool",
+                    "agent",
+                    "developer",
+                    "context window",
+                    "subscription",
+                    "pay extra",
+                    "feature",
+                    "rollout",
+                    "buys",
+                    "acquires",
+                    "expansion",
+                )
+            )
+            return ai_company_signal and concrete_update and not unrelated_world_news
         if lane == "industry_moves":
-            return any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "chips", "cloud", "datacenter", "deal"))
+            return ai_company_signal and any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "chips", "cloud", "datacenter", "deal", "expansion", "leadership", "executive shuffle")) and not any(
+                term in text for term in ("opinion", "podcast", "interview", "newsletter", "recap")
+            )
         if lane == "policy_regulation":
-            return any(term in text for term in ("policy", "regulation", "copyright", "lawsuit", "ai act", "ftc", "white house", "export control"))
+            has_policy_signal = any(term in text for term in ("policy", "regulation", "copyright", "lawsuit", "ai act", "ftc", "white house", "export control"))
+            off_brief_world_news = "ai" not in text and any(term in text for term in ("iran", "middle east", "ukraine", "shipping", "deportees", "petroleum"))
+            return has_policy_signal and ai_company_signal and not off_brief_world_news
         return True
     if lane == "india_preopen":
         blocked = (
@@ -826,7 +958,7 @@ def _passes_lane_relevance_gate(candidate: WebCandidate, *, lane: str, product: 
     return True
 
 
-def _passes_public_quality_gate(draft_text: str) -> bool:
+def _passes_public_quality_gate(draft_text: str, *, candidate: WebCandidate | None = None, product: str = "finance") -> bool:
     draft = " ".join(draft_text.split()).strip()
     if len(draft) < 90 or len(draft) > 260:
         return False
@@ -844,6 +976,13 @@ def _passes_public_quality_gate(draft_text: str) -> bool:
     )
     if any(term in lowered for term in blocked_terms):
         return False
+    if product == "ai":
+        if any(term in lowered for term in ("signals momentum", "reflects momentum", "shows momentum", "ai roundup", "this signals", "this reflects interest")):
+            return False
+        if not any(term in lowered for term in ("launched", "released", "added", "cut", "raised", "opened", "approved", "filed", "sued", "partnered", "priced", "expanded", "banned", "required")):
+            return False
+        if candidate is not None and re.search(r"\d", f"{candidate.title} {candidate.summary}") and not re.search(r"\d", draft):
+            return False
     if lowered.count(";") > 1 or draft.count("||") > 1:
         return False
     return True
@@ -1003,6 +1142,35 @@ def _topic_bucket(candidate: WebCandidate) -> str:
         return "bonds_yields"
     if any(term in text for term in ("bank", "deposits", "advances", "credit growth", "loan growth")):
         return "banking_metrics"
+    return candidate.category or "other"
+
+
+def _cluster_bucket(candidate: WebCandidate, *, product: str) -> str:
+    company = _primary_company(candidate)
+    if product == "ai":
+        event_group = _event_group(candidate)
+        return f"{company}|{event_group}|{candidate.category}"
+    return _topic_bucket(candidate)
+
+
+def _primary_company(candidate: WebCandidate) -> str:
+    text = f"{candidate.title} {candidate.summary}".lower()
+    for company in ("openai", "anthropic", "google", "deepmind", "meta", "microsoft", "xai", "mistral", "cohere", "perplexity", "hugging face"):
+        if company in text:
+            return company.replace(" ", "_")
+    return "other"
+
+
+def _event_group(candidate: WebCandidate) -> str:
+    text = f"{candidate.title} {candidate.summary} {candidate.category}".lower()
+    if any(term in text for term in ("api", "pricing", "developer", "context window", "tool", "agent")):
+        return "api_or_tooling"
+    if any(term in text for term in ("launch", "release", "model", "rollout")):
+        return "launch"
+    if any(term in text for term in ("partnership", "acquisition", "funding", "enterprise", "deal", "datacenter", "chips", "cloud")):
+        return "industry"
+    if any(term in text for term in ("policy", "regulation", "copyright", "lawsuit", "ftc", "ai act", "export control")):
+        return "policy"
     return candidate.category or "other"
 
 

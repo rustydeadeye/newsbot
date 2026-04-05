@@ -30,6 +30,7 @@ def policy_for_product(product: str) -> WireFeedSettings:
     if normalized == "ai":
         return WireFeedSettings(
             product="ai",
+            shadow_mode=True,
             max_posts_per_hour=2,
             max_posts_per_day=10,
             base_max_posts_per_day=4,

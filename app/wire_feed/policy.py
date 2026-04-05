@@ -10,6 +10,7 @@ from app.wire_feed.pipeline import WirePipelineResult
 @dataclass(frozen=True)
 class WireFeedSettings:
     product: str = "finance"
+    shadow_mode: bool = False
     max_posts_per_hour: int = 2
     max_posts_per_day: int = 15
     base_max_posts_per_day: int = 5
@@ -61,6 +62,18 @@ def plan_wire_queue(
     last_scheduled = max((record.posted_at for record in planned_posts), default=None)
 
     for candidate in ordered:
+        if settings.shadow_mode and candidate.product == "ai":
+            band = str((candidate.raw_payload or {}).get("quality_band") or "C").upper()
+            decisions.append(
+                WireQueueDecision(
+                    result=candidate,
+                    action="skip",
+                    priority=_priority_bucket(candidate),
+                    reason=f"shadow_mode_{band.lower()}",
+                )
+            )
+            continue
+
         if candidate.fetch_error:
             decisions.append(
                 WireQueueDecision(

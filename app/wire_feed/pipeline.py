@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+import logging
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +17,7 @@ from app.services.normalization.extractors import extract_facts
 from app.services.scoring import SOURCE_PRIORITY, score_event
 from app.wire_feed.sources import WireSourceDef
 
+logger = logging.getLogger(__name__)
 WIRE_AUTO_POST_THRESHOLD = 80
 _DISPLAY_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -557,6 +560,62 @@ _AI_BLOCK_TERMS = (
     "roundup",
     "weekly recap",
 )
+_AI_MARKETING_TERMS = (
+    "behind the scenes",
+    "for teens",
+    "community",
+    "researchers",
+    "responsible ai",
+    "our approach",
+    "our mission",
+    "culture",
+    "fellows",
+    "residency",
+    "scholarship",
+    "education",
+    "podcast",
+    "event",
+)
+_AI_CONCRETE_KEEP_TERMS = (
+    "launch",
+    "released",
+    "release",
+    "api",
+    "pricing",
+    "price",
+    "available",
+    "rollout",
+    "tool",
+    "model",
+    "agent",
+    "context window",
+    "developer",
+    "partnership",
+    "acquisition",
+    "funding",
+    "enterprise",
+    "lawsuit",
+    "regulation",
+    "copyright",
+    "export control",
+    "ban",
+    "approved",
+    "cut",
+)
+_AI_COMPANY_TERMS = (
+    "openai",
+    "anthropic",
+    "google",
+    "deepmind",
+    "meta",
+    "microsoft",
+    "azure",
+    "xai",
+    "mistral",
+    "cohere",
+    "perplexity",
+    "hugging face",
+)
 
 
 def _fetch_and_process_ai(source_def: WireSourceDef, drafting: DraftingService) -> list[WirePipelineResult]:
@@ -588,15 +647,34 @@ def _fetch_and_process_ai(source_def: WireSourceDef, drafting: DraftingService) 
             )
         ]
 
-    results: list[WirePipelineResult] = []
-    for fetched in items:
+    source_cap = _ai_source_cap(source_def.name)
+    inspected = 0
+    filtered = 0
+    band_counts = {"A": 0, "B": 0, "C": 0}
+    skip_reasons: dict[str, int] = {}
+    provisional: list[WirePipelineResult] = []
+    for fetched in items[: max(source_cap * 4, source_cap)]:
+        inspected += 1
         facts = _extract_ai_facts(source_def.name, fetched)
-        if _should_drop_ai_candidate(facts):
+        drop_reason = _should_drop_ai_candidate(facts)
+        if drop_reason:
+            filtered += 1
+            skip_reasons[drop_reason] = skip_reasons.get(drop_reason, 0) + 1
             continue
         importance = _score_ai_facts(facts)
         draft_text, safety_flags, confidence = drafting.build_ai_wire_post(facts)
         reason = _review_reason(importance, confidence, safety_flags)
-        results.append(
+        band, readiness_reason = ai_readiness_assessment(
+            importance_score=importance,
+            confidence_score=confidence,
+            draft_text=draft_text,
+            title=str(facts.get("headline") or ""),
+            body_text=str(facts.get("article_text") or ""),
+            event_type=str(facts.get("event_class") or ""),
+            review_reason=reason,
+        )
+        band_counts[band] = band_counts.get(band, 0) + 1
+        provisional.append(
             WirePipelineResult(
                 product="ai",
                 external_id=fetched.external_id,
@@ -609,27 +687,43 @@ def _fetch_and_process_ai(source_def: WireSourceDef, drafting: DraftingService) 
                 ticker=None,
                 importance_score=importance,
                 confidence_score=confidence,
-                would_auto_post=reason is None,
-                review_reason=reason,
+                would_auto_post=band == "A",
+                review_reason=reason if band == "C" else None,
                 draft_text=draft_text,
-                safety_flags=safety_flags,
+                safety_flags={**safety_flags, "quality_band": band, "shadow_mode": True},
                 raw_payload={
                     "source_family": "base",
                     "product": "ai",
+                    "shadow_mode": True,
+                    "quality_band": band,
+                    "readiness_reason": readiness_reason,
                     "subject_key": facts["subject_key"],
                     "company": facts["company"],
                     "article_text": facts["article_text"],
                     "category": facts["category"],
+                    "source_label": facts["source_label"],
                 },
                 published_at=fetched.published_at,
             )
         )
-    return _apply_diversity_adjustment(_dedupe_results(results))
+    results = _apply_diversity_adjustment(_dedupe_results(provisional))
+    results = sorted(results, key=lambda result: (_ai_band_rank(str((result.raw_payload or {}).get("quality_band") or "C")), result.importance_score), reverse=True)[:source_cap]
+    logger.info(
+        "AI base source processed: source=%s raw=%s filtered=%s kept=%s bands=%s skips=%s",
+        source_def.name,
+        inspected,
+        filtered,
+        len(results),
+        band_counts,
+        skip_reasons,
+    )
+    return results
 
 
 def _extract_ai_facts(source_name: str, fetched: FetchedItem) -> dict:
     title = (fetched.title or "").strip()
     summary = " ".join(str(fetched.raw_payload.get(key) or "") for key in ("summary", "description", "content", "text")).strip()
+    summary = _clean_ai_text(summary)
     article_text = " ".join(part for part in [title, summary] if part).strip()
     company = _ai_company_from_source(source_name, title)
     event_class = _classify_ai_event(title, summary)
@@ -642,6 +736,7 @@ def _extract_ai_facts(source_name: str, fetched: FetchedItem) -> dict:
         "source_name": source_name,
         "source_url": fetched.url,
         "company": company,
+        "source_label": company,
         "event_class": event_class,
         "category": category,
         "subject_key": subject_key,
@@ -696,21 +791,25 @@ def _ai_category(event_class: str) -> str:
     return "research"
 
 
-def _should_drop_ai_candidate(facts: dict) -> bool:
+def _should_drop_ai_candidate(facts: dict) -> str | None:
     text = f"{facts.get('headline', '')} {facts.get('article_text', '')}".lower()
     if any(term in text for term in _AI_BLOCK_TERMS):
-        return True
+        return "blocked_topic"
+    if any(term in text for term in _AI_MARKETING_TERMS) and not any(term in text for term in _AI_CONCRETE_KEEP_TERMS):
+        return "marketing_or_culture"
     if facts.get("event_class") == "research_update" and not any(
         term in text for term in ("launch", "available", "policy", "copyright", "enterprise", "adoption", "developer")
     ):
-        return True
-    return False
+        return "research_without_broad_impact"
+    if not any(term in text for term in _AI_COMPANY_TERMS) and not any(term in text for term in _AI_CONCRETE_KEEP_TERMS):
+        return "weak_signal"
+    return None
 
 
 def _score_ai_facts(facts: dict) -> int:
     event_class = str(facts.get("event_class") or "")
     text = f"{facts.get('headline', '')} {facts.get('article_text', '')}".lower()
-    score = 78
+    score = 72
     if event_class in {"model_launch", "api_update"}:
         score += 10
     elif event_class in {"policy_regulation", "security_incident"}:
@@ -721,4 +820,79 @@ def _score_ai_facts(facts: dict) -> int:
         score += 4
     if any(term in text for term in ("openai", "anthropic", "google", "meta", "microsoft", "xai")):
         score += 3
+    if any(term in text for term in ("map", "forest", "music", "teens", "creative")) and not any(term in text for term in ("api", "pricing", "model", "launch", "release", "tool", "agent")):
+        score -= 6
     return min(score, 95)
+
+
+def _ai_source_cap(source_name: str) -> int:
+    if source_name == "openai_news":
+        return 4
+    return 3
+
+
+def _clean_ai_text(value: str) -> str:
+    cleaned = html.unescape(value or "")
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _ai_has_concrete_signal(*, title: str, body_text: str, draft_text: str, event_type: str) -> bool:
+    combined = " ".join([title, body_text, draft_text, event_type]).lower()
+    if re.search(r"\d", combined):
+        return True
+    return any(term in combined for term in _AI_CONCRETE_KEEP_TERMS)
+
+
+def ai_quality_band(
+    *,
+    importance_score: int,
+    confidence_score: float,
+    draft_text: str,
+    title: str,
+    body_text: str,
+    event_type: str,
+    review_reason: str | None,
+) -> str:
+    band, _reason = ai_readiness_assessment(
+        importance_score=importance_score,
+        confidence_score=confidence_score,
+        draft_text=draft_text,
+        title=title,
+        body_text=body_text,
+        event_type=event_type,
+        review_reason=review_reason,
+    )
+    return band
+
+
+def ai_readiness_assessment(
+    *,
+    importance_score: int,
+    confidence_score: float,
+    draft_text: str,
+    title: str,
+    body_text: str,
+    event_type: str,
+    review_reason: str | None,
+) -> tuple[str, str]:
+    has_concrete_signal = _ai_has_concrete_signal(
+        title=title,
+        body_text=body_text,
+        draft_text=draft_text,
+        event_type=event_type,
+    )
+    if review_reason:
+        return "C", "review_flagged"
+    if not has_concrete_signal:
+        return "C", "missing_concrete_signal"
+    if event_type in {"model_launch", "api_update", "policy_regulation", "security_incident"} and importance_score >= 84 and confidence_score >= 0.82:
+        return "A", "shadow_ready"
+    if importance_score >= 76:
+        return "B", "useful_but_hold"
+    return "C", "low_importance"
+
+
+def _ai_band_rank(band: str) -> int:
+    return {"A": 3, "B": 2, "C": 1}.get(band.upper(), 0)

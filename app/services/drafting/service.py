@@ -114,7 +114,12 @@ class DraftingService:
     def build_ai_wire_post(self, facts: dict) -> tuple[str, dict, float]:
         fallback = self._ai_fallback_text(facts)
         if not self.client:
-            return fallback, self._safety_flags(fallback), 0.0
+            flags = self._safety_flags(fallback)
+            quality_reason = self._ai_quality_reason(fallback, facts)
+            if quality_reason:
+                flags["needs_review"] = True
+                flags["review_reason"] = quality_reason
+            return fallback, flags, 0.0
 
         messages = [
             {
@@ -142,10 +147,18 @@ class DraftingService:
                 flags["needs_review"] = True
             if review_reason:
                 flags["review_reason"] = review_reason
+            quality_reason = self._ai_quality_reason(text, facts)
+            if quality_reason:
+                flags["needs_review"] = True
+                flags["review_reason"] = quality_reason
             flags["prompt_version"] = AI_WIRE_PROMPT_VERSION
             return text, flags, confidence
         text = self._normalize_ai_text((raw or fallback).strip())
         flags = self._safety_flags(text)
+        quality_reason = self._ai_quality_reason(text, facts)
+        if quality_reason:
+            flags["needs_review"] = True
+            flags["review_reason"] = quality_reason
         flags["prompt_version"] = AI_WIRE_PROMPT_VERSION
         return text, flags, 0.0
 
@@ -217,12 +230,25 @@ class DraftingService:
         cleaned = re.sub(r"\s+([.,;:!?])", r"\1", cleaned).strip()
         cleaned = re.sub(r"(?i)\bsource:\s*[^.]+\.?", "", cleaned).strip()
         cleaned = re.sub(r"\b(AI)\s+AI\b", r"\1", cleaned)
+        cleaned = re.sub(r"(?i)\bthis signals momentum\b", "", cleaned).strip()
+        cleaned = re.sub(r"(?i)\breflects growing interest\b", "", cleaned).strip()
         max_len = 240
         if len(cleaned) > max_len:
             truncated = cleaned[: max_len - 3]
             last_space = truncated.rfind(" ")
             cleaned = (truncated[:last_space] if last_space > 180 else truncated).rstrip() + "..."
         return cleaned
+
+    def _ai_quality_reason(self, text: str, facts: dict) -> str | None:
+        lowered = text.lower()
+        if any(term in lowered for term in ("signals momentum", "reflects growing interest", "ai roundup", "weekly recap")):
+            return "generic_ai_commentary"
+        if not any(term in lowered for term in ("launch", "released", "added", "cut", "opened", "priced", "partnered", "filed", "sued", "required", "expanded", "rolled out")):
+            return "missing_concrete_change"
+        source_text = f"{facts.get('headline', '')} {facts.get('article_text', '')}"
+        if re.search(r"\d", source_text) and not re.search(r"\d", text):
+            return "missing_specifics"
+        return None
 
     def _template_text(self, facts: dict) -> str | None:
         wire_text = self._wire_template(facts)

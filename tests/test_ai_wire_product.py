@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 
-from app.wire_feed.pipeline import WirePipelineResult, fetch_and_process
+from app.wire_feed.pipeline import WirePipelineResult, ai_quality_band, ai_readiness_assessment, fetch_and_process
+from app.wire_feed.policy import plan_wire_queue
 from app.wire_feed.products import normalize_wire_product, policy_for_product
-from app.wire_feed.sources import WireSourceDef, get_wire_sources
-from app.wire_feed.web_pipeline import get_due_web_runs
+from app.wire_feed.sources import WireSourceDef, get_ai_source_audit, get_wire_sources
+from app.wire_feed.web_pipeline import WebCandidate, _passes_lane_relevance_gate, get_due_web_runs
 
 
 def test_normalize_wire_product_defaults_to_finance() -> None:
@@ -16,6 +17,7 @@ def test_policy_for_ai_product_uses_ai_caps() -> None:
     policy = policy_for_product("ai")
 
     assert policy.product == "ai"
+    assert policy.shadow_mode is True
     assert policy.max_posts_per_day == 10
     assert policy.base_max_posts_per_day == 4
     assert policy.web_max_posts_per_day == 6
@@ -24,10 +26,17 @@ def test_policy_for_ai_product_uses_ai_caps() -> None:
 def test_get_wire_sources_returns_ai_roster() -> None:
     sources = get_wire_sources("ai")
     names = {source.name for source in sources}
+    audit = get_ai_source_audit()
 
     assert "openai_news" in names
-    assert "anthropic_news" in names
     assert "huggingface_blog" in names
+    assert "google_ai_blog" in names
+    assert "anthropic_news" not in names
+    assert "cohere_blog" not in names
+    assert "meta_ai_blog" not in names
+    assert audit["meta_ai_blog"]["status"] == "fallback_to_web_only"
+    assert audit["anthropic_news"]["status"] == "fallback_to_web_only"
+    assert audit["cohere_blog"]["status"] == "fallback_to_web_only"
     assert all(source.product == "ai" for source in sources)
 
 
@@ -85,3 +94,89 @@ def test_fetch_and_process_ai_source_uses_ai_strategy() -> None:
     assert result.source_family == "base"
     assert result.event_type in {"model_launch", "api_update", "product_update"}
     assert result.raw_payload["product"] == "ai"
+    assert result.raw_payload["shadow_mode"] is True
+    assert result.raw_payload["quality_band"] == "A"
+
+
+def test_ai_quality_band_requires_concrete_change() -> None:
+    assert (
+        ai_quality_band(
+            importance_score=90,
+            confidence_score=0.9,
+            draft_text="OpenAI launched GPT-Next with a 1M-token context window for developers.",
+            title="OpenAI launches GPT-Next",
+            body_text="The new model adds a 1M-token context window and lower API pricing.",
+            event_type="model_launch",
+            review_reason=None,
+        )
+        == "A"
+    )
+    assert (
+        ai_quality_band(
+            importance_score=90,
+            confidence_score=0.9,
+            draft_text="AI companies are seeing more momentum lately.",
+            title="AI industry update",
+            body_text="Momentum is building across the sector.",
+            event_type="industry_move",
+            review_reason=None,
+        )
+        == "C"
+    )
+
+
+def test_ai_readiness_assessment_returns_reason() -> None:
+    band, reason = ai_readiness_assessment(
+        importance_score=86,
+        confidence_score=0.9,
+        draft_text="OpenAI launched GPT-Next with lower API pricing for developers.",
+        title="OpenAI launches GPT-Next",
+        body_text="The new model lowers API pricing for developers.",
+        event_type="api_update",
+        review_reason=None,
+    )
+
+    assert band == "A"
+    assert reason == "shadow_ready"
+
+
+def test_plan_wire_queue_holds_ai_candidates_in_shadow_mode() -> None:
+    candidate = WirePipelineResult(
+        product="ai",
+        external_id="ai-1",
+        source_name="openai_news",
+        source_family="base",
+        title="OpenAI launches a developer update",
+        event_type="model_launch",
+        dedupe_key="ai|model_launch|openai-update",
+        subject_key="openai-update",
+        ticker=None,
+        importance_score=90,
+        confidence_score=0.9,
+        would_auto_post=True,
+        review_reason=None,
+        draft_text="OpenAI launched a new model with lower pricing for developers.",
+        safety_flags={"quality_band": "A"},
+        raw_payload={"quality_band": "A"},
+        published_at=datetime.now(timezone.utc),
+    )
+
+    decisions = plan_wire_queue([candidate], recent_posts=[], now=datetime.now(timezone.utc), settings=policy_for_product("ai"))
+
+    assert decisions[0].action == "skip"
+    assert decisions[0].reason == "shadow_mode_a"
+
+
+def test_ai_policy_lane_rejects_unrelated_world_news() -> None:
+    candidate = WebCandidate(
+        title="Iran tensions hit global shipping routes",
+        summary="Fresh conflict worries are pushing freight costs higher.",
+        source_name="Reuters",
+        source_url="https://www.reuters.com/world/middle-east/example",
+        published_at="2026-04-06T08:00:00Z",
+        category="policy_regulation",
+        india_impact="This matters for trade costs.",
+        why_it_matters="Global shocks can feed through to costs.",
+    )
+
+    assert _passes_lane_relevance_gate(candidate, lane="policy_regulation", product="ai") is False
