@@ -129,6 +129,25 @@ def test_public_quality_gate_rejects_robotic_or_insider_drafts() -> None:
     )
 
 
+def test_ai_public_quality_gate_accepts_restriction_and_billing_updates() -> None:
+    candidate = WebCandidate(
+        title="Anthropic essentially bans OpenClaw from Claude by making subscribers pay extra - The Verge",
+        summary="Anthropic will require separate pay-as-you-go billing for OpenClaw support from Claude subscribers starting April 4 at 3PM ET.",
+        source_name="The Verge",
+        source_url="https://example.com/openclaw",
+        published_at="2026-04-06T08:00:00+00:00",
+        category="policy_regulation",
+        india_impact="This matters if users, teams, or developers get new models, tools, prices, or limits to work with.",
+        why_it_matters="Product changes matter most when they alter capability, price, speed, or access.",
+    )
+
+    assert _passes_public_quality_gate(
+        "Anthropic will stop Claude subscribers from using their plan limits with OpenClaw on April 4 at 3PM ET. Users will need separate pay-as-you-go billing, making third-party agent use more expensive.",
+        candidate=candidate,
+        product="ai",
+    )
+
+
 def test_india_close_lane_gate_blocks_prediction_market_story() -> None:
     candidate = WebCandidate(
         title="Prediction markets challenge tribal casinos’ hard-won place in US gambling - AP News",
@@ -142,3 +161,18 @@ def test_india_close_lane_gate_blocks_prediction_market_story() -> None:
     )
 
     assert not _passes_lane_relevance_gate(candidate, lane="india_close")
+
+
+def test_ai_product_updates_lane_blocks_unrelated_world_news() -> None:
+    candidate = WebCandidate(
+        title="Zelenskiy in Syria to meet President Sharaa, sources say - Reuters",
+        summary="Regional diplomacy talks continue amid wider conflict concerns.",
+        source_name="Reuters",
+        source_url="https://example.com/syria",
+        published_at="2026-04-06T08:00:00+00:00",
+        category="policy_regulation",
+        india_impact="This matters because AI rules can shape what companies can ship, how they train models, and what users can access.",
+        why_it_matters="Policy moves can reshape AI competition, training data, deployment rules, and product roadmaps.",
+    )
+
+    assert _passes_lane_relevance_gate(candidate, lane="product_updates", product="ai") is False

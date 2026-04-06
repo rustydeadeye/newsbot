@@ -549,3 +549,151 @@ def test_run_wire_cycle_skips_base_fetch_when_recent_base_candidates_exist(monke
 
     assert fetch_calls["count"] == 0
     assert summary["sources_processed"] == 0
+
+
+def test_run_wire_cycle_fetches_base_sources_in_normal_product_path(monkeypatch) -> None:
+    class StubSource:
+        key = "tradient"
+        name = "tradient_market_news"
+
+    class StubDrafting:
+        pass
+
+    fetch_calls = {"count": 0}
+
+    monkeypatch.setattr("app.wire_feed.runner.get_wire_sources", lambda product: [StubSource()])
+    monkeypatch.setattr("app.wire_feed.runner.DraftingService", lambda *args, **kwargs: StubDrafting())
+
+    def fake_fetch(source, drafting):
+        fetch_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr("app.wire_feed.runner.fetch_and_process", fake_fetch)
+    monkeypatch.setattr("app.wire_feed.runner.plan_wire_queue", lambda results, recent_posts, now, settings: [])
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self):
+            return None
+
+        def get(self, model, ident):
+            return None
+
+    class FakeCandidateRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def has_source_candidate_since(self, customer_profile_id, source_name, since):
+            return False
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def expire_stale_jobs(self, now, settings, customer_profile_id=None):
+            return 0
+
+        def recent_post_records(self, since, customer_profile_id=None):
+            return []
+
+    class FakeProfile:
+        id = 5
+        wire_product = "finance"
+        token_store = {"source_families": ["base"]}
+
+    class FakeCustomerRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def list_active_autopost_customers(self):
+            return [FakeProfile()]
+
+    monkeypatch.setattr("app.wire_feed.runner.SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr("app.wire_feed.runner.WireCandidateRepository", FakeCandidateRepo)
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr("app.wire_feed.runner.CustomerProfileRepository", FakeCustomerRepo)
+    monkeypatch.setattr("app.wire_feed.runner._publish_due_jobs", lambda db, profile, now: {"posted": 0, "failed": 0})
+
+    summary = run_wire_cycle()
+
+    assert fetch_calls["count"] == 1
+    assert summary["sources_processed"] == 1
+
+
+def test_run_wire_cycle_respects_source_family_preferences(monkeypatch) -> None:
+    class StubSource:
+        key = "tradient"
+        name = "tradient_market_news"
+
+    class StubDrafting:
+        pass
+
+    monkeypatch.setattr("app.wire_feed.runner.get_wire_sources", lambda product: [StubSource()])
+    monkeypatch.setattr("app.wire_feed.runner.DraftingService", lambda *args, **kwargs: StubDrafting())
+    monkeypatch.setattr("app.wire_feed.runner.fetch_and_process", lambda source, drafting: [])
+    web_calls = {"count": 0}
+
+    def fake_fetch_web(*args, **kwargs):
+        web_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr("app.wire_feed.runner.fetch_web_breaking_candidates", fake_fetch_web)
+    monkeypatch.setattr("app.wire_feed.runner.get_due_web_runs", lambda now, has_run_since, product=None: [type("Run", (), {"key": "product_updates"})()])
+    monkeypatch.setattr("app.wire_feed.runner.plan_wire_queue", lambda results, recent_posts, now, settings: [])
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self):
+            return None
+
+        def get(self, model, ident):
+            return None
+
+    class FakeCandidateRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def has_source_candidate_since(self, customer_profile_id, source_name, since):
+            return False
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def expire_stale_jobs(self, now, settings, customer_profile_id=None):
+            return 0
+
+        def recent_post_records(self, since, customer_profile_id=None):
+            return []
+
+    class FakeProfile:
+        id = 5
+        wire_product = "finance"
+        token_store = {"source_families": ["base"]}
+
+    class FakeCustomerRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def list_active_autopost_customers(self):
+            return [FakeProfile()]
+
+    monkeypatch.setattr("app.wire_feed.runner.SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr("app.wire_feed.runner.WireCandidateRepository", FakeCandidateRepo)
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr("app.wire_feed.runner.CustomerProfileRepository", FakeCustomerRepo)
+    monkeypatch.setattr("app.wire_feed.runner._publish_due_jobs", lambda db, profile, now: {"posted": 0, "failed": 0})
+
+    run_wire_cycle()
+
+    assert web_calls["count"] == 0

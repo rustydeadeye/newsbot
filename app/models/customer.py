@@ -34,6 +34,10 @@ class CustomerProfile(Base, TimestampMixin):
     def to_dict(self) -> dict:
         store = self.token_store or {}
         display_name = self.display_name.strip() if self.display_name else None
+        source_families = store.get("source_families") or ["base", "web"]
+        source_families = [family for family in source_families if family in {"base", "web"}]
+        if not source_families:
+            source_families = ["base", "web"]
         return {
             "id": self.id,
             "workspace_user_id": self.workspace_user_id,
@@ -53,6 +57,9 @@ class CustomerProfile(Base, TimestampMixin):
             "openai_configured": bool(store.get("openai_api_key")),
             "tavily_configured": bool(store.get("tavily_api_key")),
             "x_connected": bool(store.get("x_access_token")),
+            "source_families": source_families,
+            "base_source_enabled": "base" in source_families,
+            "web_source_enabled": "web" in source_families,
             "auto_post_enabled": self.auto_post_enabled,
             "auto_post_threshold": self.auto_post_threshold,
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,

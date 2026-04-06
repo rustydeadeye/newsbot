@@ -92,6 +92,9 @@ def _autopost_dashboard_payload(db: Session, viewer: ViewerContext) -> dict:
         "display_name": profile_payload.get("display_name"),
         "wire_product": normalize_wire_product(profile_payload.get("wire_product")),
         "wire_product_label": display_wire_product(profile_payload.get("wire_product")),
+        "source_families": profile_payload.get("source_families") or ["base", "web"],
+        "base_source_enabled": bool(profile_payload.get("base_source_enabled", True)),
+        "web_source_enabled": bool(profile_payload.get("web_source_enabled", True)),
         "x_connected": profile_payload.get("x_connected"),
         "openai_configured": profile_payload.get("openai_configured"),
         "tavily_configured": profile_payload.get("tavily_configured"),
@@ -179,7 +182,7 @@ def update_profile_settings(
     )
     allowed_keys = {"display_name", "auto_post_enabled", "wire_product"}
     update_payload = {key: value for key, value in update_payload.items() if key in allowed_keys}
-    token_updates: dict[str, str] = {}
+    token_updates: dict[str, object] = {}
     if payload.openai_api_key is not None:
         normalized = payload.openai_api_key.strip()
         if normalized:
@@ -188,6 +191,10 @@ def update_profile_settings(
         normalized = payload.tavily_api_key.strip()
         if normalized:
             token_updates["tavily_api_key"] = normalized
+    if payload.source_families is not None:
+        families = [family for family in payload.source_families if family in {"base", "web"}]
+        if families:
+            token_updates["source_families"] = list(dict.fromkeys(families))
     if "wire_product" in update_payload:
         update_payload["wire_product"] = normalize_wire_product(update_payload["wire_product"])
     updated = repo.update(settings, update_payload)

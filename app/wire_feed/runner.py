@@ -23,6 +23,16 @@ _BASE_FETCH_INTERVAL = timedelta(hours=1)
 _MAX_POST_LENGTH = 280
 
 
+def _enabled_source_families(profile) -> set[str]:
+    store = dict(getattr(profile, "token_store", {}) or {})
+    configured = store.get("source_families")
+    if isinstance(configured, list):
+        enabled = {str(item).strip().lower() for item in configured if str(item).strip().lower() in {"base", "web"}}
+        if enabled:
+            return enabled
+    return {"base", "web"}
+
+
 def run_wire_cycle() -> dict[str, list[dict] | int]:
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -56,6 +66,7 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
         for profile in active_profiles:
             product = normalize_wire_product(getattr(profile, "wire_product", "finance"))
             store = dict(getattr(profile, "token_store", {}) or {})
+            enabled_source_families = _enabled_source_families(profile)
             try:
                 drafting = DraftingService(api_key=store.get("openai_api_key"), model=settings.openai_model)
             except TypeError:
@@ -76,6 +87,7 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
                 sources = get_wire_sources(product)
             except TypeError:
                 sources = get_wire_sources()
+            if "base" in enabled_source_families:
                 for source in sources:
                     source_name = getattr(source, "name", None) or f"{source.key}_feed"
                     has_source_since = getattr(candidate_repo, "has_source_candidate_since", None)
@@ -88,9 +100,9 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
                         has_recent = False
                     if has_recent:
                         continue
-                candidate_batches.append((source.key, fetch_and_process(source, drafting)))
+                    candidate_batches.append((source.key, fetch_and_process(source, drafting)))
 
-            if settings.wire_web_breaking_enabled:
+            if settings.wire_web_breaking_enabled and "web" in enabled_source_families:
                 def _has_source_since(source_name, since):
                     try:
                         return candidate_repo.has_source_candidate_since(profile.id, source_name, since)

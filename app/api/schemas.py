@@ -9,6 +9,7 @@ class ProfileSettingsUpdate(BaseModel):
     wire_product: str | None = Field(default=None, pattern="^(finance|ai)$")
     openai_api_key: str | None = None
     tavily_api_key: str | None = None
+    source_families: list[str] | None = None
 
 
 class PublishJobRetryAction(BaseModel):
