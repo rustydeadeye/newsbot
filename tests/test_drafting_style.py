@@ -41,6 +41,26 @@ def test_make_draft_post_uses_fallback_without_openai() -> None:
     assert "Source:" not in draft.draft_text
 
 
+def test_build_ai_lane_post_falls_back_when_openai_response_is_not_json() -> None:
+    service = DraftingService()
+    service.client = object()
+    service._call_openai_with_retry = lambda messages: "plain text response"
+    service._parse_json_response = lambda raw: None
+
+    text, flags, confidence = service.build_ai_lane_post(
+        {
+            "headline": "OpenAI updates Codex pricing",
+            "article_text": "The change affects how teams adopt Codex in real workflows.",
+            "company": "OpenAI",
+        },
+        "ai_explained",
+    )
+
+    assert text
+    assert confidence == 0.0
+    assert flags["ai_lane"] == "ai_explained"
+
+
 def test_macro_template_prefers_rbi_releases_language() -> None:
     service = DraftingService()
     text = service._fallback_text(

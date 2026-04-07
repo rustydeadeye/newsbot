@@ -41,6 +41,16 @@ def _run_wire_feed() -> None:
         logging.getLogger(__name__).exception("wire feed cycle failed")
 
 
+def _run_instagram_pipeline() -> None:
+    from app.instagram_pipeline.runtime import run_instagram_publish_cycle
+
+    try:
+        result = run_instagram_publish_cycle()
+        logging.getLogger(__name__).info("instagram publish cycle complete: %s", result)
+    except Exception:
+        logging.getLogger(__name__).exception("instagram publish cycle failed")
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     settings = get_settings()
@@ -54,11 +64,22 @@ async def _lifespan(app: FastAPI):
             max_instances=1,
             coalesce=True,
         )
+    if settings.instagram_pipeline_enabled:
+        scheduler.add_job(
+            _run_instagram_pipeline,
+            trigger="interval",
+            seconds=settings.instagram_pipeline_interval_sec,
+            id="instagram_publish_cycle",
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.start()
     logging.getLogger(__name__).info(
-        "Scheduler started — wire-only runtime enabled=%s interval=%ds",
+        "Scheduler started — wire enabled=%s interval=%ds instagram enabled=%s instagram_interval=%ds",
         settings.wire_feed_enabled,
         settings.wire_feed_interval_sec,
+        settings.instagram_pipeline_enabled,
+        settings.instagram_pipeline_interval_sec,
     )
     yield
     scheduler.shutdown(wait=False)

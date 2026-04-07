@@ -14,3 +14,16 @@ class ProfileSettingsUpdate(BaseModel):
 
 class PublishJobRetryAction(BaseModel):
     scheduled_for: datetime | None = None
+
+
+class InstagramDraftGenerateRequest(BaseModel):
+    customer_profile_id: int | None = None
+    limit_per_lane: int = Field(default=2, ge=1, le=5)
+
+
+class InstagramDraftReviewAction(BaseModel):
+    notes: str | None = None
+
+
+class InstagramDraftScheduleAction(BaseModel):
+    scheduled_for: datetime | None = None

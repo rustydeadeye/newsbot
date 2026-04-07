@@ -1,10 +1,11 @@
 import { AccessDenied } from "@/components/access-denied";
 import { AdminApiErrorPanel } from "@/components/admin-api-error-panel";
+import { InstagramDraftsPanel } from "@/components/instagram-drafts-panel";
 import { KpiCard } from "@/components/kpi-card";
 import { ShellHeader } from "@/components/shell-header";
 import { StatusPanel } from "@/components/status-panel";
 import { WireFeedQueuePanel } from "@/components/wire-feed-queue-panel";
-import { getWireJobs, getWireLogs } from "@/lib/api";
+import { getInstagramDrafts, getInstagramPublishJobs, getInstagramPublishLogs, getWireJobs, getWireLogs } from "@/lib/api";
 import { requireServerViewer } from "@/lib/viewer";
 
 export default async function OperationsPage() {
@@ -15,8 +16,17 @@ export default async function OperationsPage() {
 
   let wireJobs;
   let wireLogs;
+  let instagramDrafts;
+  let instagramPublishJobs;
+  let instagramPublishLogs;
   try {
-    [wireJobs, wireLogs] = await Promise.all([getWireJobs(accessToken), getWireLogs(accessToken)]);
+    [wireJobs, wireLogs, instagramDrafts, instagramPublishJobs, instagramPublishLogs] = await Promise.all([
+      getWireJobs(accessToken),
+      getWireLogs(accessToken),
+      getInstagramDrafts(accessToken),
+      getInstagramPublishJobs(accessToken),
+      getInstagramPublishLogs(accessToken),
+    ]);
   } catch (error) {
     return (
       <div className="page-grid">
@@ -66,6 +76,9 @@ export default async function OperationsPage() {
         <KpiCard label="Failed" value={failed} detail="Needs intervention" tone={failed > 0 ? "danger" : "calm"} />
         <KpiCard label="Skipped" value={skipped} detail="Rejected by safety or queue rules" />
         <KpiCard label="Recent Logs" value={wireLogs.length} detail="Recent posting outcomes" />
+        <KpiCard label="IG Drafts" value={instagramDrafts.length} detail="Carousel drafts in review" />
+        <KpiCard label="IG Jobs" value={instagramPublishJobs.length} detail="Scheduled or publishing carousels" />
+        <KpiCard label="IG Logs" value={instagramPublishLogs.length} detail="Recent Instagram publish outcomes" />
       </div>
       <StatusPanel
         eyebrow="Operator focus"
@@ -97,6 +110,7 @@ export default async function OperationsPage() {
         </div>
       </StatusPanel>
       <WireFeedQueuePanel jobs={wireJobs} logs={wireLogs} />
+      <InstagramDraftsPanel drafts={instagramDrafts} publishJobs={instagramPublishJobs} publishLogs={instagramPublishLogs} />
     </div>
   );
 }

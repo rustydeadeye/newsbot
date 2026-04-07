@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.wire_feed import WireCandidate, WireJob, WirePublishLog
 from app.wire_feed.pipeline import WirePipelineResult
-from app.wire_feed.policy import WireFeedSettings, WirePostRecord, WireQueueDecision, is_stale_published_at
+from app.wire_feed.policy import WireFeedSettings, WirePostRecord, WireQueueDecision, is_stale_candidate
 
 
 class WireCandidateRepository:
@@ -224,7 +224,7 @@ class WireJobRepository:
         rows = list(self.db.execute(stmt).all())
         expired = 0
         for job, candidate in rows:
-            if is_stale_published_at(candidate.published_at, job.priority, now, settings):
+            if is_stale_candidate(candidate, job.priority, now, settings):
                 job.status = "skipped"
                 job.result_message = "stale_candidate"
                 job.last_error = None

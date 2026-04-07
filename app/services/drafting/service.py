@@ -16,7 +16,17 @@ logger = logging.getLogger(__name__)
 from app.core.config import get_settings
 from app.models.event import DraftPost, Event
 from app.prompts import SAFETY_BLOCKLIST, STYLE_BLOCKLIST
-from app.services.drafting.prompts import AI_WIRE_POST_PROMPT, AI_WIRE_PROMPT_VERSION, POST_GENERATION_PROMPT, PROMPT_VERSION
+from app.services.drafting.prompts import (
+    AI_EXPLAINED_POST_PROMPT,
+    AI_FOR_BUSINESS_POST_PROMPT,
+    AI_NEWS_POST_PROMPT,
+    AI_WIRE_POST_PROMPT,
+    AI_WIRE_PROMPT_VERSION,
+    INSTAGRAM_CAROUSEL_BLUEPRINT_PROMPT,
+    INSTAGRAM_CAROUSEL_PROMPT_VERSION,
+    POST_GENERATION_PROMPT,
+    PROMPT_VERSION,
+)
 
 
 class DraftingService:
@@ -112,10 +122,13 @@ class DraftingService:
         )
 
     def build_ai_wire_post(self, facts: dict) -> tuple[str, dict, float]:
-        fallback = self._ai_fallback_text(facts)
+        return self.build_ai_lane_post(facts, "ai_news")
+
+    def build_ai_lane_post(self, facts: dict, lane: str = "ai_news") -> tuple[str, dict, float]:
+        fallback = self._ai_fallback_text(facts, lane)
         if not self.client:
             flags = self._safety_flags(fallback)
-            quality_reason = self._ai_quality_reason(fallback, facts)
+            quality_reason = self._ai_quality_reason(fallback, facts, lane)
             if quality_reason:
                 flags["needs_review"] = True
                 flags["review_reason"] = quality_reason
@@ -125,14 +138,14 @@ class DraftingService:
             {
                 "role": "system",
                 "content": (
-                    "You write public-facing AI news posts for social media. "
-                    "Keep them factual, simple, and useful. "
+                    "You write public-facing AI social posts. "
+                    "Keep them factual, simple, useful, and lane-aware. "
                     "Always respond with valid JSON."
                 ),
             },
             {
                 "role": "user",
-                "content": f"{AI_WIRE_POST_PROMPT}\n\nFacts:\n{facts}",
+                "content": f"{self._ai_lane_prompt(lane)}\n\nFacts:\n{facts}",
             },
         ]
         raw = self._call_openai_with_retry(messages)
@@ -147,20 +160,158 @@ class DraftingService:
                 flags["needs_review"] = True
             if review_reason:
                 flags["review_reason"] = review_reason
-            quality_reason = self._ai_quality_reason(text, facts)
+            quality_reason = self._ai_quality_reason(text, facts, lane)
             if quality_reason:
                 flags["needs_review"] = True
                 flags["review_reason"] = quality_reason
             flags["prompt_version"] = AI_WIRE_PROMPT_VERSION
+            flags["ai_lane"] = lane
             return text, flags, confidence
         text = self._normalize_ai_text((raw or fallback).strip())
         flags = self._safety_flags(text)
-        quality_reason = self._ai_quality_reason(text, facts)
+        quality_reason = self._ai_quality_reason(text, facts, lane)
         if quality_reason:
             flags["needs_review"] = True
             flags["review_reason"] = quality_reason
         flags["prompt_version"] = AI_WIRE_PROMPT_VERSION
+        flags["ai_lane"] = lane
         return text, flags, 0.0
+
+    def build_instagram_carousel_blueprint(self, facts: dict, lane: str) -> dict:
+        fallback = self._instagram_fallback_blueprint(facts, lane)
+        if not self.client:
+            return fallback
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You write structured Instagram carousel blueprints for AI creators. "
+                    "Keep them factual, useful, and distinct by lane. Always respond with valid JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"{INSTAGRAM_CAROUSEL_BLUEPRINT_PROMPT}\n\nLane: {lane}\nFacts:\n{facts}",
+            },
+        ]
+        raw = self._call_openai_with_retry(messages)
+        parsed = self._parse_json_response(raw)
+        if not isinstance(parsed, dict):
+            return fallback
+        parsed.setdefault("schema_version", INSTAGRAM_CAROUSEL_PROMPT_VERSION)
+        parsed.setdefault("title", fallback["title"])
+        parsed.setdefault("hook", fallback["hook"])
+        parsed.setdefault("angle", fallback["angle"])
+        parsed.setdefault("carousel_type", fallback["carousel_type"])
+        parsed.setdefault("slide_count", fallback["slide_count"])
+        parsed.setdefault("slides", fallback["slides"])
+        parsed.setdefault("caption", fallback["caption"])
+        return parsed
+
+    def _ai_lane_prompt(self, lane: str) -> str:
+        if lane == "ai_explained":
+            return AI_EXPLAINED_POST_PROMPT
+        if lane == "ai_for_business":
+            return AI_FOR_BUSINESS_POST_PROMPT
+        return AI_NEWS_POST_PROMPT
+
+    def _instagram_fallback_blueprint(self, facts: dict, lane: str) -> dict:
+        title = str(facts.get("headline") or facts.get("title") or "AI update").strip()
+        company = str(facts.get("company") or "AI").strip()
+        snippet = " ".join(str(facts.get("article_text") or facts.get("snippet") or "").split())
+        desired_slide_count = self._instagram_desired_slide_count(facts, lane)
+        if lane == "ai_explained":
+            hook = f"What most people miss about {company}"
+            angle = "Explain the real meaning behind the update"
+            carousel_type = "explainer_breakdown"
+            roles = [
+                ("hook", title, ""),
+                ("myth", "THE DEFAULT READ", "Most readers stop at the announcement and miss the shift underneath."),
+                ("reality", "WHAT IS ACTUALLY CHANGING", snippet or "The real change is in how the product gets used."),
+                ("evidence", "THE EVIDENCE", "Look at pricing, access, workflow fit, or new limits users now face."),
+                ("counter_argument", "WHAT PEOPLE WILL SAY", "It can look like a small update. It rarely stays small once behavior changes."),
+                ("deeper_meaning", "WHAT THIS REALLY MEANS", "The bigger story is about adoption, trust, cost, or distribution."),
+                ("key_takeaway", "KEY TAKEAWAY", "The behavior shift matters more than the headline."),
+                ("closing_cta", "@newsbot", "Save this and follow @newsbot for cleaner AI breakdowns."),
+            ]
+        elif lane == "ai_for_business":
+            hook = f"What businesses should learn from {company}"
+            angle = "Translate the update into workflow value"
+            carousel_type = "business_playbook"
+            roles = [
+                ("hook", title, ""),
+                ("pain_point", "THE OPERATOR PROBLEM", "Most teams still lose time to repeated work and manual handoffs."),
+                ("mistake", "THE COMMON MISTAKE", "Buying more AI tools without fixing the workflow creates more noise."),
+                ("evidence", "THE PRACTICAL SIGNAL", snippet or "The real signal is whether teams can use the change inside real work."),
+                ("better_way", "THE BETTER QUESTION", "Ask whether this changes speed, cost, quality, or adoption for a real team."),
+                ("workflow", "WHERE THIS FITS", "The best use cases appear inside repeated workflows, not one-off demos."),
+                ("outcome", "WHAT GOOD LOOKS LIKE", "Look for saved time, lower cost, or fewer broken handoffs."),
+                ("closing_cta", "@newsbot", "Save this if you want AI ideas that actually help operators."),
+            ]
+        else:
+            hook = f"What changed with {company}?"
+            angle = "Break down the update and why it matters now"
+            carousel_type = "news_breakdown"
+            roles = [
+                ("hook", title, ""),
+                ("what_changed", "WHAT CHANGED", snippet or "The update changes the product in a concrete way."),
+                ("why_now", "WHY NOW", "This matters because AI adoption moves when friction drops or access expands."),
+                ("evidence", "THE STRONGEST SIGNAL", "Watch the pricing, rollout, launch, or billing change."),
+                ("who_it_affects", "WHO FEELS IT FIRST", "The first impact usually lands on builders, teams, or power users."),
+                ("implication", "WHAT HAPPENS NEXT", "A small product change can reshape usage faster than a flashy launch."),
+                ("key_takeaway", "KEY TAKEAWAY", "The story matters only if it changes real usage."),
+                ("closing_cta", "@newsbot", "Save this and follow @newsbot for sharper AI updates."),
+            ]
+        keep_count = max(4, min(len(roles), desired_slide_count))
+        selected_roles = roles[: keep_count - 1] + [roles[-1]]
+        slides = []
+        for idx, (role, headline, support) in enumerate(selected_roles, start=1):
+            slides.append(
+                {
+                    "slide_number": idx,
+                    "role": role,
+                    "headline": headline,
+                    "support": support,
+                }
+            )
+        return {
+            "title": title,
+            "hook": hook,
+            "angle": angle,
+            "carousel_type": carousel_type,
+            "slide_count": len(slides),
+            "slides": slides,
+            "caption": {
+                "hook": hook,
+                "body": f"{title}. {snippet or angle}",
+                "cta": "Save this and follow @newsbot for the useful version.",
+            },
+        }
+
+    def _instagram_desired_slide_count(self, facts: dict, lane: str) -> int:
+        text = " ".join(
+            str(facts.get(key) or "")
+            for key in ("article_text", "snippet", "headline", "title")
+        ).strip()
+        word_count = len(re.findall(r"\b[\w@'-]+\b", text))
+        if lane == "ai_news":
+            if word_count < 16:
+                return 4
+            if word_count < 32:
+                return 5
+            return 6
+        if lane == "ai_for_business":
+            if word_count < 18:
+                return 5
+            if word_count < 36:
+                return 6
+            return 7
+        if word_count < 18:
+            return 5
+        if word_count < 36:
+            return 6
+        return 7
 
     def _fallback_text(self, facts: dict) -> str:
         template_text = self._template_text(facts)
@@ -209,16 +360,23 @@ class DraftingService:
         }
         return mapping.get(source_name, source_name.replace("_", " ").upper())
 
-    def _ai_fallback_text(self, facts: dict) -> str:
+    def _ai_fallback_text(self, facts: dict, lane: str = "ai_news") -> str:
         company = str(facts.get("company") or "AI company").strip()
         headline = str(facts.get("headline") or "AI update").strip().rstrip(".")
         article_text = str(facts.get("article_text") or "").strip()
-        if article_text:
-            compact = " ".join(article_text.split())
-            if compact and compact.lower() not in headline.lower():
-                candidate = f"{headline}. {compact}"
+        compact = " ".join(article_text.split())
+        if lane == "ai_explained":
+            if compact:
+                candidate = f"{headline}. What matters is how this changes what users or teams can actually do."
             else:
-                candidate = headline
+                candidate = f"{company}'s latest AI update matters more for what it changes than for the announcement itself."
+        elif lane == "ai_for_business":
+            if compact:
+                candidate = f"{headline}. For businesses, the real question is whether this saves time, lowers cost, or makes AI easier to use in real workflows."
+            else:
+                candidate = f"{company}'s latest AI update matters if it makes work faster, cheaper, or easier to adopt."
+        elif compact and compact.lower() not in headline.lower():
+            candidate = f"{headline}. {compact}"
         else:
             candidate = headline
         if not candidate:
@@ -239,14 +397,22 @@ class DraftingService:
             cleaned = (truncated[:last_space] if last_space > 180 else truncated).rstrip() + "..."
         return cleaned
 
-    def _ai_quality_reason(self, text: str, facts: dict) -> str | None:
+    def _ai_quality_reason(self, text: str, facts: dict, lane: str = "ai_news") -> str | None:
         lowered = text.lower()
         if any(term in lowered for term in ("signals momentum", "reflects growing interest", "ai roundup", "weekly recap")):
             return "generic_ai_commentary"
-        if not any(term in lowered for term in ("launch", "released", "added", "cut", "opened", "priced", "partnered", "filed", "sued", "required", "expanded", "rolled out")):
+        if lane == "ai_explained":
+            if not any(term in lowered for term in ("matters", "means", "changes", "really", "bigger", "takeaway")):
+                return "missing_explanatory_takeaway"
+        elif lane == "ai_for_business":
+            if not any(term in lowered for term in ("business", "teams", "workflow", "cost", "time", "adopt", "operators", "founders")):
+                return "missing_business_angle"
+            if any(term in lowered for term in ("book a call", "hire us", "our service", "our product")):
+                return "too_salesy"
+        elif not any(term in lowered for term in ("launch", "released", "added", "cut", "opened", "priced", "partnered", "filed", "sued", "required", "expanded", "rolled out", "billing", "subscription", "pay-as-you-go")):
             return "missing_concrete_change"
         source_text = f"{facts.get('headline', '')} {facts.get('article_text', '')}"
-        if re.search(r"\d", source_text) and not re.search(r"\d", text):
+        if lane == "ai_news" and re.search(r"\d", source_text) and not re.search(r"\d", text):
             return "missing_specifics"
         return None
 

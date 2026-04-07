@@ -108,6 +108,105 @@ def test_apply_customer_branding_appends_sebi_suffix() -> None:
     )
 
 
+def test_apply_customer_branding_trims_body_cleanly_before_suffix() -> None:
+    from app.wire_feed.runner import _apply_customer_branding
+
+    result = type(
+        "Result",
+        (),
+        {
+            "draft_text": "Indobell Insulations wins Rs 1.47 crore domestic defence order from Goa Shipyard Limited for supply of 2 Shipsets Searox Slabs for Frigates Project, to be executed by December 2026 under the contract terms.",
+            "raw_payload": {},
+        },
+    )()
+    profile = type(
+        "Profile",
+        (),
+        {
+            "display_name": "AngryTraders",
+            "token_store": {
+                "brand_name": "AngryTraders",
+                "sebi_registration": "INH000023506",
+                "cta_short": "Follow us and stay updated with stock reports and updates.",
+            },
+        },
+    )()
+
+    _apply_customer_branding([result], profile)
+
+    assert len(result.draft_text) <= 280
+    assert "to be executed by..." not in result.draft_text
+    assert not result.draft_text.split("\n\n", 1)[0].endswith("...")
+
+
+def test_publish_due_jobs_skips_invalid_final_text(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from app.wire_feed.runner import _publish_due_jobs
+
+    class Candidate:
+        id = 1
+        dedupe_key = "earnings|coalindia|offtake"
+        draft_text = "Indobell Insulations wins Rs 1.47 crore domestic defence order from Goa Shipyard for supply of 2 Shipsets Searox Slabs, to be executed by..."
+
+    class Job:
+        id = 12
+        candidate_id = 1
+        attempt_count = 1
+        status = "publishing"
+        scheduled_for = None
+        last_error = None
+        result_message = None
+        idempotency_key = "ghi"
+
+    class FakeJobRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def claim_ready(self, now, limit=20):
+            assert limit == 1
+            return [job]
+
+        def has_active_duplicate(self, dedupe_key, exclude_job_id=None):
+            return False
+
+        def add_log(self, job_id, response, platform_post_id=None):
+            return None
+
+    class FakePublisher:
+        def publish(self, text, idempotency_key=None):
+            raise AssertionError("publish should not be called for invalid final text")
+
+    class FakeDb:
+        def get(self, model, ident):
+            return candidate if ident == 1 else None
+
+        def commit(self):
+            return None
+
+        def flush(self):
+            return None
+
+    class FakeProfile:
+        token_store = {"x_access_token": "token", "x_refresh_token": "refresh"}
+
+    candidate = Candidate()
+    job = Job()
+
+    monkeypatch.setattr("app.wire_feed.runner.WireJobRepository", FakeJobRepo)
+    monkeypatch.setattr(
+        "app.wire_feed.runner.CustomerProfileRepository",
+        lambda db: type("Repo", (), {"get_active_autopost_customer": lambda self: FakeProfile()})(),
+    )
+    monkeypatch.setattr("app.wire_feed.runner.XPublisher", lambda token_store=None, on_token_refresh=None: FakePublisher())
+
+    result = _publish_due_jobs(FakeDb(), datetime.now(timezone.utc))
+
+    assert result == {"posted": 0, "failed": 0}
+    assert job.status == "skipped"
+    assert job.result_message == "invalid_final_text"
+
+
 def test_publish_due_jobs_skips_active_duplicate(monkeypatch) -> None:
     from datetime import datetime, timezone
 
@@ -643,7 +742,7 @@ def test_run_wire_cycle_respects_source_family_preferences(monkeypatch) -> None:
         return []
 
     monkeypatch.setattr("app.wire_feed.runner.fetch_web_breaking_candidates", fake_fetch_web)
-    monkeypatch.setattr("app.wire_feed.runner.get_due_web_runs", lambda now, has_run_since, product=None: [type("Run", (), {"key": "product_updates"})()])
+    monkeypatch.setattr("app.wire_feed.runner.get_due_web_runs", lambda now, has_run_since, product=None: [type("Run", (), {"key": "ai_news"})()])
     monkeypatch.setattr("app.wire_feed.runner.plan_wire_queue", lambda results, recent_posts, now, settings: [])
 
     class FakeSession:

@@ -1,6 +1,7 @@
 import { ViewerProfile } from "@/lib/session";
 
 export type WireProduct = "finance" | "ai";
+export type InstagramLane = "ai_news" | "ai_explained" | "ai_for_business";
 
 export type WireJobStatus = "queued" | "publishing" | "failed" | "skipped" | "cancelled" | "posted";
 
@@ -144,6 +145,100 @@ export type WirePublishLog = {
     source_family?: string;
     lane?: string | null;
   } | null;
+};
+
+export type InstagramCarouselSlide = {
+  slide_number: number;
+  role: string;
+  headline: string;
+  support: string;
+  template_id?: string | null;
+  template_version?: string | null;
+  schema_version?: string | null;
+  fields?: Record<string, unknown>;
+};
+
+export type InstagramCaption = {
+  hook: string;
+  body: string;
+  cta: string;
+};
+
+export type InstagramDraft = {
+  id: number;
+  customer_profile_id: number;
+  lane: InstagramLane;
+  seed_key: string;
+  story_cluster: string;
+  seed_source_name: string;
+  seed_source_family: string;
+  title: string;
+  angle: string;
+  hook: string;
+  carousel_type: string;
+  slide_count: number;
+  slides: InstagramCarouselSlide[];
+  caption: InstagramCaption;
+  review_status: string;
+  review_notes: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  quality_band: string | null;
+  generation_notes: Record<string, unknown>;
+  template_bundle_version: string;
+  template_version: string;
+  schema_version: string;
+  render_status: string;
+  asset_manifest: Record<string, unknown>;
+  preview_slides: {
+    slide_number: number;
+    preview_url: string;
+    storage_path: string;
+    width?: number;
+    height?: number;
+    content_hash?: string;
+    template_id?: string | null;
+    template_version?: string | null;
+    schema_version?: string | null;
+  }[];
+  publish_status: string;
+  scheduled_for: string | null;
+  published_at: string | null;
+  instagram_media_container_id: string | null;
+  instagram_publish_id: string | null;
+  last_error: string | null;
+  render_attempt_count: number;
+  publish_attempt_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type InstagramPublishJob = {
+  id: number;
+  instagram_draft_id: number;
+  status: string;
+  scheduled_for: string | null;
+  attempt_count: number;
+  last_error: string | null;
+  result_message: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  draft: {
+    id: number;
+    lane: InstagramLane;
+    title: string;
+    publish_status: string;
+    render_status: string;
+  } | null;
+};
+
+export type InstagramPublishLog = {
+  id: number;
+  instagram_publish_job_id: number;
+  platform_post_id: string | null;
+  posted_at: string | null;
+  response_payload: Record<string, unknown>;
+  created_at: string | null;
 };
 
 export type CreatorSettings = {

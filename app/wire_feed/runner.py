@@ -11,7 +11,7 @@ from app.repositories.customers import CustomerProfileRepository
 from app.repositories.wire_feed import WireCandidateRepository, WireJobRepository
 from app.services.publishing.x_client import XPublisher
 from app.services.drafting.service import DraftingService
-from app.wire_feed.pipeline import fetch_and_process
+from app.wire_feed.pipeline import fetch_and_process, generate_ai_evergreen_backlog_results
 from app.wire_feed.policy import plan_wire_queue
 from app.wire_feed.products import normalize_wire_product, policy_for_product
 from app.wire_feed.sources import get_wire_sources
@@ -21,6 +21,27 @@ logger = logging.getLogger(__name__)
 _WIRE_MAX_ATTEMPTS = 3
 _BASE_FETCH_INTERVAL = timedelta(hours=1)
 _MAX_POST_LENGTH = 280
+_DANGLING_ENDINGS = (
+    "for",
+    "with",
+    "by",
+    "as",
+    "to",
+    "from",
+    "and",
+    "or",
+    "of",
+    "in",
+    "on",
+    "at",
+    "into",
+    "over",
+    "under",
+    "after",
+    "before",
+    "vs",
+    "vs.",
+)
 
 
 def _enabled_source_families(profile) -> set[str]:
@@ -101,6 +122,8 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
                     if has_recent:
                         continue
                     candidate_batches.append((source.key, fetch_and_process(source, drafting)))
+                if product == "ai":
+                    candidate_batches.append(("ai_evergreen_backlog", generate_ai_evergreen_backlog_results(drafting)))
 
             if settings.wire_web_breaking_enabled and "web" in enabled_source_families:
                 def _has_source_since(source_name, since):
@@ -229,13 +252,52 @@ def _append_suffix(text: str, suffix: str) -> str:
     allowed = _MAX_POST_LENGTH - len(separator) - len(suffix)
     if allowed <= 20:
         return suffix[:_MAX_POST_LENGTH]
-    trimmed = text[:allowed].rstrip()
-    if len(trimmed) < len(text):
-        cutoff = trimmed.rfind(" ")
-        if cutoff > max(allowed - 30, 20):
-            trimmed = trimmed[:cutoff].rstrip()
-        trimmed = trimmed.rstrip(" .,;:!?") + "..."
+    trimmed = _trim_publish_body(text, allowed)
     return f"{trimmed}{separator}{suffix}"
+
+
+def _trim_publish_body(text: str, allowed: int) -> str:
+    cleaned = " ".join((text or "").split()).strip()
+    if len(cleaned) <= allowed:
+        return cleaned
+    truncated = cleaned[:allowed].rstrip()
+    sentence_cut = max(truncated.rfind(". "), truncated.rfind("! "), truncated.rfind("? "))
+    clause_cut = max(truncated.rfind("; "), truncated.rfind(": "))
+    chosen_cut = max(sentence_cut, clause_cut)
+    if chosen_cut > max(allowed - 80, 40):
+        truncated = truncated[: chosen_cut + 1].rstrip()
+    else:
+        word_cut = truncated.rfind(" ")
+        if word_cut > max(allowed - 40, 30):
+            truncated = truncated[:word_cut].rstrip()
+    truncated = truncated.rstrip(" ,;:-")
+    words = truncated.split()
+    while words and words[-1].lower().rstrip(".") in _DANGLING_ENDINGS:
+        words.pop()
+    truncated = " ".join(words).rstrip(" ,;:-")
+    if truncated and truncated[-1] not in ".!?":
+        truncated += "."
+    return truncated or cleaned[:allowed].rstrip(" ,;:-") + "."
+
+
+def _is_valid_publish_text(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned or len(cleaned) > _MAX_POST_LENGTH:
+        return False
+    body = cleaned.split("\n\n", 1)[0].strip()
+    if len(body) < 25:
+        return False
+    lowered = body.lower()
+    if lowered.endswith("..."):
+        return False
+    if any(lowered.endswith(f" {ending}") for ending in _DANGLING_ENDINGS):
+        return False
+    blocked_endings = (
+        "the real message is...",
+        "what matters now is...",
+        "watch this...",
+    )
+    return not any(lowered.endswith(ending) for ending in blocked_endings)
 
 
 def _publish_due_jobs(db, profile, now: datetime | None = None) -> dict[str, int]:
@@ -280,6 +342,11 @@ def _publish_due_jobs(db, profile, now: datetime | None = None) -> dict[str, int
         if has_duplicate:
             job.status = "skipped"
             job.result_message = "duplicate_active_job"
+            job.last_error = None
+            continue
+        if not _is_valid_publish_text(candidate.draft_text):
+            job.status = "skipped"
+            job.result_message = "invalid_final_text"
             job.last_error = None
             continue
         try:

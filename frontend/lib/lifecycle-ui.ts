@@ -133,9 +133,9 @@ export function getNextAvailableSlot(settings: CreatorSettings) {
 export function formatPipelineLabel(product?: string, sourceFamily?: string, lane?: string | null, sourceName?: string) {
   if (sourceFamily === "web") {
     if (product === "ai") {
-      if (lane === "product_updates") return "AI web / products";
-      if (lane === "industry_moves") return "AI web / industry";
-      if (lane === "policy_regulation") return "AI web / policy";
+      if (lane === "ai_news") return "AI / news";
+      if (lane === "ai_explained") return "AI / explained";
+      if (lane === "ai_for_business") return "AI / business";
       return "AI web";
     }
     if (lane === "india_preopen") return "Finance web / preopen";

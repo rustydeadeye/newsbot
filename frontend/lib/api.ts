@@ -1,5 +1,5 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-import { AuthMeResponse, AutopostDashboard, WireJob, WirePublishLog } from "@/lib/types";
+import { AuthMeResponse, AutopostDashboard, InstagramDraft, InstagramPublishJob, InstagramPublishLog, WireJob, WirePublishLog } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -61,6 +61,71 @@ async function fetchJson<T>(path: string, init?: FetchJsonOptions): Promise<T> {
 
 export function getWireJobs(accessToken?: string | null) {
   return fetchJson<WireJob[]>("/publish-jobs/wire", { accessToken });
+}
+
+export function getInstagramDrafts(accessToken?: string | null) {
+  return fetchJson<InstagramDraft[]>("/instagram/drafts", { accessToken });
+}
+
+export function generateInstagramDrafts(limitPerLane = 2) {
+  return fetchJson<InstagramDraft[]>("/instagram/drafts/generate", {
+    method: "POST",
+    body: JSON.stringify({ limit_per_lane: limitPerLane })
+  });
+}
+
+export function renderInstagramDraft(draftId: number) {
+  return fetchJson<InstagramDraft>(`/instagram/drafts/${draftId}/render`, {
+    method: "POST"
+  });
+}
+
+export function renderApprovedInstagramDrafts(limit = 10) {
+  return fetchJson<InstagramDraft[]>(`/instagram/drafts/render-approved?limit=${limit}`, {
+    method: "POST"
+  });
+}
+
+export function approveInstagramDraft(draftId: number, notes?: string) {
+  return fetchJson<InstagramDraft>(`/instagram/drafts/${draftId}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ notes })
+  });
+}
+
+export function rejectInstagramDraft(draftId: number, notes?: string) {
+  return fetchJson<InstagramDraft>(`/instagram/drafts/${draftId}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ notes })
+  });
+}
+
+export function regenerateInstagramDraft(draftId: number, notes?: string) {
+  return fetchJson<InstagramDraft>(`/instagram/drafts/${draftId}/regenerate`, {
+    method: "POST",
+    body: JSON.stringify({ notes })
+  });
+}
+
+export function scheduleInstagramDraft(draftId: number, scheduledFor?: string) {
+  return fetchJson<InstagramDraft>(`/instagram/drafts/${draftId}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ scheduled_for: scheduledFor ?? null })
+  });
+}
+
+export function publishInstagramDraftNow(draftId: number) {
+  return fetchJson<InstagramDraft>(`/instagram/drafts/${draftId}/publish-now`, {
+    method: "POST"
+  });
+}
+
+export function getInstagramPublishJobs(accessToken?: string | null) {
+  return fetchJson<InstagramPublishJob[]>("/instagram/publish-jobs", { accessToken });
+}
+
+export function getInstagramPublishLogs(accessToken?: string | null) {
+  return fetchJson<InstagramPublishLog[]>("/instagram/publish-logs", { accessToken });
 }
 
 export function getWireLogs(accessToken?: string | null) {

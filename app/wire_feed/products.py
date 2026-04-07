@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.core.config import get_settings
 from app.wire_feed.policy import WireFeedSettings
 
 WIRE_PRODUCTS = {"finance", "ai"}
@@ -28,9 +29,10 @@ class WireProductPolicy:
 def policy_for_product(product: str) -> WireFeedSettings:
     normalized = normalize_wire_product(product)
     if normalized == "ai":
+        settings = get_settings()
         return WireFeedSettings(
             product="ai",
-            shadow_mode=True,
+            shadow_mode=settings.ai_shadow_mode,
             max_posts_per_hour=2,
             max_posts_per_day=10,
             base_max_posts_per_day=4,

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.wire_feed.pipeline import WirePipelineResult
+from app.wire_feed.pipeline import AI_LANE_MAX_AGE_HOURS, WirePipelineResult
 
 
 @dataclass(frozen=True)
@@ -199,10 +200,7 @@ def _is_stale(
     now: datetime,
     settings: WireFeedSettings,
 ) -> bool:
-    if candidate.published_at is None or priority == "breaking":
-        return False
-    ttl_hours = settings.high_ttl_hours if priority == "high" else settings.normal_ttl_hours
-    return candidate.published_at < now - timedelta(hours=ttl_hours)
+    return is_stale_candidate(candidate, priority, now, settings)
 
 
 def is_stale_published_at(
@@ -213,6 +211,29 @@ def is_stale_published_at(
 ) -> bool:
     if published_at is None or priority == "breaking":
         return False
+    ttl_hours = settings.high_ttl_hours if priority == "high" else settings.normal_ttl_hours
+    return published_at < now - timedelta(hours=ttl_hours)
+
+
+def is_stale_candidate(
+    candidate: Any,
+    priority: str,
+    now: datetime,
+    settings: WireFeedSettings,
+) -> bool:
+    published_at = getattr(candidate, "published_at", None)
+    if published_at is None or priority == "breaking":
+        return False
+    raw_payload = dict(getattr(candidate, "raw_payload", {}) or {})
+    if str(getattr(candidate, "product", raw_payload.get("product") or "")) == "ai":
+        if bool(raw_payload.get("is_evergreen")):
+            return False
+        lane = str(raw_payload.get("lane") or "ai_news")
+        ttl_hours = AI_LANE_MAX_AGE_HOURS.get(
+            lane,
+            settings.high_ttl_hours if priority == "high" else settings.normal_ttl_hours,
+        )
+        return published_at < now - timedelta(hours=ttl_hours)
     ttl_hours = settings.high_ttl_hours if priority == "high" else settings.normal_ttl_hours
     return published_at < now - timedelta(hours=ttl_hours)
 
