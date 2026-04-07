@@ -45,6 +45,13 @@ def test_policy_for_ai_product_can_disable_shadow_mode(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
+def test_policy_for_finance_product_raises_base_source_daily_cap() -> None:
+    policy = policy_for_product("finance")
+
+    assert policy.product == "finance"
+    assert policy.base_max_posts_per_day == 8
+
+
 def test_get_wire_sources_returns_ai_roster() -> None:
     sources = get_wire_sources("ai")
     names = {source.name for source in sources}

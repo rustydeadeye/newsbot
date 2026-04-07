@@ -44,4 +44,7 @@ def policy_for_product(product: str) -> WireFeedSettings:
             high_ttl_hours=18,
             normal_ttl_hours=12,
         )
-    return WireFeedSettings(product="finance")
+    return WireFeedSettings(
+        product="finance",
+        base_max_posts_per_day=8,
+    )
