@@ -49,7 +49,9 @@ def test_policy_for_finance_product_raises_base_source_daily_cap() -> None:
     policy = policy_for_product("finance")
 
     assert policy.product == "finance"
-    assert policy.base_max_posts_per_day == 8
+    assert policy.max_posts_per_hour == 8
+    assert policy.max_posts_per_day == 15
+    assert policy.base_max_posts_per_day == 12
 
 
 def test_get_wire_sources_returns_ai_roster() -> None:
