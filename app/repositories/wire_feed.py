@@ -224,7 +224,8 @@ class WireJobRepository:
         rows = list(self.db.execute(stmt).all())
         expired = 0
         for job, candidate in rows:
-            if is_stale_candidate(candidate, job.priority, now, settings):
+            freshness_check_at = job.scheduled_for or now
+            if is_stale_candidate(candidate, job.priority, freshness_check_at, settings):
                 job.status = "skipped"
                 job.result_message = "stale_candidate"
                 job.last_error = None

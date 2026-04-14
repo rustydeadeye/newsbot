@@ -173,7 +173,7 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
                         candidate = candidate_repo.upsert_from_result(profile.id, decision.result)
                     except TypeError:
                         candidate = candidate_repo.upsert_from_result(decision.result)
-                    if decision.priority == "breaking" and decision.action in {"post_now", "queue"} and decision.scheduled_for is not None:
+                    if decision.priority == "breaking" and decision.action in {"post_now", "queue", "defer"} and decision.scheduled_for is not None:
                         try:
                             job_repo.bump_non_breaking_queue(decision.scheduled_for, policy, customer_profile_id=profile.id)
                         except TypeError:
@@ -181,7 +181,7 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
                     job_repo.record_decision(candidate, decision)
                     if decision.action == "post_now":
                         summary["post_now"] += 1
-                    elif decision.action == "queue":
+                    elif decision.action in {"queue", "defer"}:
                         summary["queued"] += 1
                     else:
                         summary["skipped"] += 1

@@ -60,7 +60,7 @@ def test_plan_wire_queue_skips_recent_duplicate() -> None:
     assert decisions[0].reason == "duplicate_cooldown"
 
 
-def test_plan_wire_queue_respects_hourly_limit() -> None:
+def test_plan_wire_queue_defers_when_hourly_capacity_is_full() -> None:
     now = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
     recent = [
         WirePostRecord(dedupe_key=f"earnings|t{i}|k", posted_at=now - timedelta(minutes=5 * i))
@@ -70,8 +70,9 @@ def test_plan_wire_queue_respects_hourly_limit() -> None:
 
     decisions = plan_wire_queue([candidate], recent_posts=recent, now=now, settings=WireFeedSettings(max_posts_per_hour=2))
 
-    assert decisions[0].action == "skip"
-    assert decisions[0].reason == "hourly_limit"
+    assert decisions[0].action == "defer"
+    assert decisions[0].reason == "deferred_hourly_capacity"
+    assert decisions[0].scheduled_for == now + timedelta(minutes=55)
 
 
 def test_plan_wire_queue_delays_non_breaking_items_during_quiet_hours() -> None:
@@ -164,7 +165,28 @@ def test_plan_wire_queue_respects_per_family_daily_caps() -> None:
     ]
 
     candidate = _candidate("One more web", 90, ticker="WEB", source_family="web")
-    decisions = plan_wire_queue([candidate], recent_posts=recent, now=now)
+    decisions = plan_wire_queue(
+        [candidate],
+        recent_posts=recent,
+        now=now,
+        settings=WireFeedSettings(web_max_posts_per_day=10, high_ttl_hours=24, normal_ttl_hours=24),
+    )
+
+    assert decisions[0].action == "defer"
+    assert decisions[0].reason == "deferred_web_capacity"
+    assert decisions[0].scheduled_for == now + timedelta(hours=13)
+
+
+def test_plan_wire_queue_skips_when_candidate_expires_before_next_slot() -> None:
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
+    recent = [
+        WirePostRecord(dedupe_key=f"earnings|t{i}|k", posted_at=now - timedelta(minutes=5 * i))
+        for i in range(2)
+    ]
+    candidate = _candidate("Soon stale", 90, ticker="NEWS")
+    stale_soon = candidate.__class__(**{**candidate.__dict__, "published_at": now - timedelta(hours=5, minutes=56)})
+
+    decisions = plan_wire_queue([stale_soon], recent_posts=recent, now=now, settings=WireFeedSettings(max_posts_per_hour=2))
 
     assert decisions[0].action == "skip"
-    assert decisions[0].reason == "web_daily_limit"
+    assert decisions[0].reason == "expired_before_next_slot"

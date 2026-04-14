@@ -12,6 +12,7 @@ from app.wire_feed.pipeline import AI_LANE_MAX_AGE_HOURS, WirePipelineResult
 class WireFeedSettings:
     product: str = "finance"
     shadow_mode: bool = False
+    target_posts_per_hour: int = 2
     max_posts_per_hour: int = 2
     max_posts_per_day: int = 15
     base_max_posts_per_day: int = 5
@@ -108,35 +109,37 @@ def plan_wire_queue(
             decisions.append(WireQueueDecision(result=candidate, action="skip", priority=priority, reason="duplicate_cooldown"))
             continue
 
-        if _count_since(planned_posts, now - timedelta(hours=1)) >= settings.max_posts_per_hour:
-            decisions.append(WireQueueDecision(result=candidate, action="skip", priority=priority, reason="hourly_limit"))
+        earliest, defer_reason = _next_slot_for_candidate(
+            candidate,
+            priority=priority,
+            planned_posts=planned_posts,
+            now=now,
+            last_scheduled=last_scheduled,
+            settings=settings,
+        )
+        if earliest is None:
+            decisions.append(WireQueueDecision(result=candidate, action="skip", priority=priority, reason="capacity_unavailable"))
             continue
-
-        if _count_since(planned_posts, now - timedelta(days=1)) >= settings.max_posts_per_day:
-            decisions.append(WireQueueDecision(result=candidate, action="skip", priority=priority, reason="daily_limit"))
-            continue
-
-        if _count_since_family(planned_posts, candidate.source_family, now - timedelta(days=1)) >= _family_daily_limit(candidate.source_family, settings):
+        if _is_stale(candidate, priority, earliest, settings):
             decisions.append(
                 WireQueueDecision(
                     result=candidate,
                     action="skip",
                     priority=priority,
-                    reason=f"{candidate.source_family}_daily_limit",
+                    reason="expired_before_next_slot" if defer_reason else "stale_candidate",
                 )
             )
             continue
-
-        gap_minutes = _gap_minutes(priority, settings)
-        if priority == "breaking":
-            last_breaking = max((record.posted_at for record in planned_posts if record.priority == "breaking"), default=None)
-            earliest = now if last_breaking is None else max(now, last_breaking + timedelta(minutes=gap_minutes))
-        else:
-            earliest = now if last_scheduled is None else max(now, last_scheduled + timedelta(minutes=gap_minutes))
-        if _uses_quiet_hours(candidate, priority) and _in_quiet_hours(earliest, settings):
-            earliest = _next_quiet_end(earliest, settings)
-        action = "post_now" if earliest <= now else "queue"
-        decisions.append(WireQueueDecision(result=candidate, action=action, priority=priority, scheduled_for=earliest))
+        action = "post_now" if earliest <= now and not defer_reason else ("defer" if defer_reason else "queue")
+        decisions.append(
+            WireQueueDecision(
+                result=candidate,
+                action=action,
+                priority=priority,
+                scheduled_for=earliest,
+                reason=defer_reason,
+            )
+        )
         planned_posts.append(
             WirePostRecord(
                 dedupe_key=dedupe_key,
@@ -150,6 +153,51 @@ def plan_wire_queue(
         last_scheduled = earliest
 
     return decisions
+
+
+def _next_slot_for_candidate(
+    candidate: WirePipelineResult,
+    *,
+    priority: str,
+    planned_posts: list[WirePostRecord],
+    now: datetime,
+    last_scheduled: datetime | None,
+    settings: WireFeedSettings,
+) -> tuple[datetime | None, str | None]:
+    gap_minutes = _gap_minutes(priority, settings)
+    if priority == "breaking":
+        last_breaking = max((record.posted_at for record in planned_posts if record.priority == "breaking"), default=None)
+        slot = now if last_breaking is None else max(now, last_breaking + timedelta(minutes=gap_minutes))
+    else:
+        slot = now if last_scheduled is None else max(now, last_scheduled + timedelta(minutes=gap_minutes))
+
+    defer_reason: str | None = None
+    for _ in range(48):
+        if _uses_quiet_hours(candidate, priority) and _in_quiet_hours(slot, settings):
+            slot = _next_quiet_end(slot, settings)
+
+        hourly_count = _count_since(planned_posts, slot - timedelta(hours=1), as_of=slot)
+        if hourly_count >= settings.max_posts_per_hour:
+            slot = _next_hourly_capacity_time(planned_posts, slot, settings)
+            defer_reason = defer_reason or "deferred_hourly_capacity"
+            continue
+
+        daily_count = _count_since(planned_posts, slot - timedelta(days=1), as_of=slot)
+        if daily_count >= settings.max_posts_per_day:
+            slot = _next_daily_capacity_time(planned_posts, slot, settings.max_posts_per_day)
+            defer_reason = defer_reason or "deferred_daily_capacity"
+            continue
+
+        family_limit = _family_daily_limit(candidate.source_family, settings)
+        family_count = _count_since_family(planned_posts, candidate.source_family, slot - timedelta(days=1), as_of=slot)
+        if family_count >= family_limit:
+            slot = _next_family_capacity_time(planned_posts, candidate.source_family, slot, family_limit)
+            defer_reason = defer_reason or f"deferred_{candidate.source_family}_capacity"
+            continue
+
+        return slot, defer_reason
+
+    return None, defer_reason
 
 
 def _priority_bucket(candidate: WirePipelineResult) -> str:
@@ -252,12 +300,51 @@ def _is_duplicate_recent(
     )
 
 
-def _count_since(records: list[WirePostRecord], cutoff: datetime) -> int:
-    return sum(1 for record in records if record.posted_at >= cutoff)
+def _count_since(records: list[WirePostRecord], cutoff: datetime, as_of: datetime | None = None) -> int:
+    if as_of is None:
+        return sum(1 for record in records if record.posted_at > cutoff)
+    return sum(1 for record in records if cutoff < record.posted_at <= as_of)
 
 
-def _count_since_family(records: list[WirePostRecord], source_family: str, cutoff: datetime) -> int:
-    return sum(1 for record in records if record.posted_at >= cutoff and record.source_family == source_family)
+def _count_since_family(
+    records: list[WirePostRecord],
+    source_family: str,
+    cutoff: datetime,
+    as_of: datetime | None = None,
+) -> int:
+    if as_of is None:
+        return sum(1 for record in records if record.posted_at > cutoff and record.source_family == source_family)
+    return sum(
+        1
+        for record in records
+        if cutoff < record.posted_at <= as_of and record.source_family == source_family
+    )
+
+
+def _next_hourly_capacity_time(records: list[WirePostRecord], slot: datetime, settings: WireFeedSettings) -> datetime:
+    window_records = [record for record in records if slot - timedelta(hours=1) < record.posted_at <= slot]
+    if not window_records:
+        return slot
+    oldest = min(record.posted_at for record in window_records)
+    return max(slot, oldest + timedelta(hours=1))
+
+
+def _next_daily_capacity_time(records: list[WirePostRecord], slot: datetime, daily_limit: int) -> datetime:
+    window_records = sorted((record.posted_at for record in records if slot - timedelta(days=1) < record.posted_at <= slot))
+    if len(window_records) < daily_limit:
+        return slot
+    return max(slot, window_records[0] + timedelta(days=1))
+
+
+def _next_family_capacity_time(records: list[WirePostRecord], source_family: str, slot: datetime, family_limit: int) -> datetime:
+    window_records = sorted(
+        record.posted_at
+        for record in records
+        if record.source_family == source_family and slot - timedelta(days=1) < record.posted_at <= slot
+    )
+    if len(window_records) < family_limit:
+        return slot
+    return max(slot, window_records[0] + timedelta(days=1))
 
 
 def _family_daily_limit(source_family: str, settings: WireFeedSettings) -> int:
