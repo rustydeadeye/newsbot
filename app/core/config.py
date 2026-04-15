@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     wire_feed_enabled: bool = Field(default=False, alias="WIRE_FEED_ENABLED")
     ai_shadow_mode: bool = Field(default=True, alias="AI_SHADOW_MODE")
     wire_feed_interval_sec: int = Field(default=900, alias="WIRE_FEED_INTERVAL_SEC")
+    wire_feed_timeout_sec: int = Field(default=720, alias="WIRE_FEED_TIMEOUT_SEC")
     instagram_pipeline_enabled: bool = Field(default=False, alias="INSTAGRAM_PIPELINE_ENABLED")
     instagram_pipeline_interval_sec: int = Field(default=300, alias="INSTAGRAM_PIPELINE_INTERVAL_SEC")
     instagram_asset_bucket: str = Field(default="instagram-carousel-assets", alias="INSTAGRAM_ASSET_BUCKET")
