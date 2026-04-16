@@ -31,6 +31,25 @@ def test_policy_for_ai_product_uses_ai_caps() -> None:
     assert policy.max_posts_per_day == 10
     assert policy.base_max_posts_per_day == 4
     assert policy.web_max_posts_per_day == 6
+    assert policy.future_queue_horizon_hours == 24
+
+
+def test_ai_planning_recent_records_ignores_far_future_queue() -> None:
+    from app.wire_feed.policy import WirePostRecord
+    from app.wire_feed.runner import _planning_recent_records
+
+    now = datetime(2026, 4, 16, 12, 0, tzinfo=timezone.utc)
+    policy = policy_for_product("ai")
+    records = [
+        WirePostRecord(dedupe_key="posted|recent", posted_at=now - timedelta(hours=2), status="posted"),
+        WirePostRecord(dedupe_key="queued|near", posted_at=now + timedelta(hours=6), status="queued"),
+        WirePostRecord(dedupe_key="queued|far", posted_at=now + timedelta(days=7), status="queued"),
+    ]
+
+    filtered = _planning_recent_records(records, now, policy)
+
+    dedupe_keys = {record.dedupe_key for record in filtered}
+    assert dedupe_keys == {"posted|recent", "queued|near"}
 
 
 def test_policy_for_ai_product_can_disable_shadow_mode(monkeypatch) -> None:

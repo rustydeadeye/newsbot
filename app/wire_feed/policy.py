@@ -21,6 +21,7 @@ class WireFeedSettings:
     high_gap_minutes: int = 45
     normal_gap_minutes: int = 60
     duplicate_cooldown_minutes: int = 180
+    future_queue_horizon_hours: int | None = None
     high_ttl_hours: int = 6
     normal_ttl_hours: int = 4
     timezone: str = "Asia/Kolkata"

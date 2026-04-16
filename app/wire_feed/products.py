@@ -41,6 +41,7 @@ def policy_for_product(product: str) -> WireFeedSettings:
             high_gap_minutes=60,
             normal_gap_minutes=90,
             duplicate_cooldown_minutes=360,
+            future_queue_horizon_hours=24,
             high_ttl_hours=18,
             normal_ttl_hours=12,
         )

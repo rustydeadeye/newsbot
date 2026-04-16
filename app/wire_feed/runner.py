@@ -101,6 +101,7 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
                 recent_records = job_repo.recent_post_records(now - timedelta(days=1), profile.id)
             except TypeError:
                 recent_records = job_repo.recent_post_records(now - timedelta(days=1))
+            recent_records = _planning_recent_records(recent_records, now, policy)
             summary["skipped"] += expired
 
             candidate_batches: list[tuple[str, list]] = []
@@ -211,6 +212,24 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
             summary["failed"] += publish_counts["failed"]
 
     return summary
+
+
+def _planning_recent_records(records, now: datetime, settings) -> list:
+    horizon_hours = getattr(settings, "future_queue_horizon_hours", None)
+    if not horizon_hours or horizon_hours <= 0:
+        return list(records)
+
+    horizon = now + timedelta(hours=horizon_hours)
+    filtered = []
+    for record in records:
+        status = str(getattr(record, "status", "posted") or "posted")
+        scheduled_at = getattr(record, "posted_at", None)
+        if status not in {"queued", "publishing"}:
+            filtered.append(record)
+            continue
+        if scheduled_at is None or scheduled_at <= horizon:
+            filtered.append(record)
+    return filtered
 
 
 def _apply_customer_branding(results: list, profile) -> None:
