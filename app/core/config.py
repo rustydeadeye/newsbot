@@ -9,6 +9,10 @@ class Settings(BaseSettings):
 
     app_name: str = "Newsbot"
     database_url: str = Field(alias="DATABASE_URL")
+    db_pool_size: int = Field(default=10, alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=20, alias="DB_MAX_OVERFLOW")
+    db_pool_timeout_sec: int = Field(default=30, alias="DB_POOL_TIMEOUT_SEC")
+    db_pool_recycle_sec: int = Field(default=1800, alias="DB_POOL_RECYCLE_SEC")
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
     supabase_publishable_key: str | None = Field(default=None, alias="SUPABASE_PUBLISHABLE_KEY")
     supabase_service_role_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")

@@ -73,6 +73,27 @@ def test_policy_for_finance_product_raises_base_source_daily_cap() -> None:
     assert policy.base_max_posts_per_day == 12
 
 
+def test_db_engine_kwargs_use_explicit_pooling_for_postgres() -> None:
+    from app.db.session import _engine_kwargs
+
+    kwargs = _engine_kwargs("postgresql+psycopg://dryrun:dryrun@localhost/dryrun")
+
+    assert kwargs["pool_pre_ping"] is True
+    assert kwargs["pool_size"] == 10
+    assert kwargs["max_overflow"] == 20
+    assert kwargs["pool_timeout"] == 30
+    assert kwargs["pool_recycle"] == 1800
+    assert kwargs["pool_use_lifo"] is True
+
+
+def test_db_engine_kwargs_leave_sqlite_untuned() -> None:
+    from app.db.session import _engine_kwargs
+
+    kwargs = _engine_kwargs("sqlite+pysqlite:///:memory:")
+
+    assert kwargs == {"future": True, "pool_pre_ping": True}
+
+
 def test_get_wire_sources_returns_ai_roster() -> None:
     sources = get_wire_sources("ai")
     names = {source.name for source in sources}
