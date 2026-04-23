@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.wire_feed import WireCandidate, WireJob, WirePublishLog
@@ -213,29 +213,34 @@ class WireJobRepository:
             for candidate, job in rows
         ]
 
-    def expire_stale_jobs(self, now: datetime, settings: WireFeedSettings, customer_profile_id: int | None = None) -> int:
+    def expire_stale_jobs(self, now: datetime, settings: WireFeedSettings, customer_profile_id: int | None = None, batch_size: int = 100) -> int:
         stmt: Select[tuple[WireJob, WireCandidate]] = (
             select(WireJob, WireCandidate)
             .join(WireCandidate, WireCandidate.id == WireJob.candidate_id)
             .where(WireJob.status == "queued")
+            .order_by(WireJob.scheduled_for.asc().nulls_last(), WireJob.id.asc())
+            .limit(batch_size)
+            .with_for_update(of=WireJob, skip_locked=True)
         )
         if customer_profile_id is not None:
             stmt = stmt.where(WireCandidate.customer_profile_id == customer_profile_id)
         rows = list(self.db.execute(stmt).all())
-        expired = 0
+        expired_job_ids: list[int] = []
         for job, candidate in rows:
             freshness_check_at = job.scheduled_for or now
             if is_stale_candidate(candidate, job.priority, freshness_check_at, settings):
-                job.status = "skipped"
-                job.result_message = "stale_candidate"
-                job.last_error = None
-                candidate.last_action = "skip"
-                candidate.last_reason = "stale_candidate"
-                candidate.last_scheduled_for = None
-                expired += 1
-        if expired:
-            self.db.flush()
-        return expired
+                expired_job_ids.append(job.id)
+        if not expired_job_ids:
+            return 0
+
+        # Keep expiry on the job row only. Candidate last_* fields are
+        # denormalized metadata and must not be in the critical scheduler path.
+        self.db.execute(
+            update(WireJob)
+            .where(WireJob.id.in_(expired_job_ids))
+            .values(status="skipped", result_message="stale_candidate", last_error=None)
+        )
+        return len(expired_job_ids)
 
     def claim_ready(self, now: datetime, limit: int = 20, customer_profile_id: int | None = None) -> list[WireJob]:
         stmt = (

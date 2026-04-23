@@ -724,6 +724,59 @@ def test_run_wire_cycle_fetches_base_sources_in_normal_product_path(monkeypatch)
     assert summary["sources_processed"] == 1
 
 
+def test_run_wire_cycle_continues_after_profile_failure(monkeypatch) -> None:
+    from app.wire_feed.runner import run_wire_cycle
+
+    class FakeSession:
+        rollback_count = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def rollback(self):
+            type(self).rollback_count += 1
+
+        def get(self, model, ident):
+            return None
+
+    class Profile:
+        def __init__(self, ident, product):
+            self.id = ident
+            self.display_name = f"profile-{ident}"
+            self.wire_product = product
+            self.token_store = {}
+
+    class FakeCustomerRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def list_active_autopost_customers(self):
+            return [Profile(1, "ai"), Profile(5, "finance")]
+
+    calls = []
+
+    def fake_run_profile_cycle(db, profile, now, settings, summary):
+        calls.append(profile.id)
+        if profile.id == 1:
+            raise RuntimeError("stale expiry timeout")
+        summary["sources_processed"] += 1
+
+    monkeypatch.setattr("app.wire_feed.runner.SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr("app.wire_feed.runner.CustomerProfileRepository", FakeCustomerRepo)
+    monkeypatch.setattr("app.wire_feed.runner._run_profile_cycle", fake_run_profile_cycle)
+
+    summary = run_wire_cycle()
+
+    assert calls == [1, 5]
+    assert FakeSession.rollback_count == 1
+    assert summary["failed"] == 1
+    assert summary["sources_processed"] == 1
+    assert summary["items"][-1]["customer_profile_id"] == 1
+
+
 def test_run_wire_cycle_respects_source_family_preferences(monkeypatch) -> None:
     class StubSource:
         key = "tradient"

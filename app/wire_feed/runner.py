@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.models.customer import CustomerProfile
 from app.models.wire_feed import WireCandidate, WireJob
 from app.repositories.customers import CustomerProfileRepository
 from app.repositories.wire_feed import WireCandidateRepository, WireJobRepository
@@ -68,150 +69,205 @@ def run_wire_cycle() -> dict[str, list[dict] | int]:
         "items": [],
     }
     with SessionLocal() as db:
-        candidate_repo = WireCandidateRepository(db)
-        job_repo = WireJobRepository(db)
         customer_repo = CustomerProfileRepository(db)
-        list_active = getattr(customer_repo, "list_active_autopost_customers", None)
-        if callable(list_active):
-            active_profiles = list_active()
-        else:
-            get_active = getattr(customer_repo, "get_active_autopost_customer", None)
-            profile = get_active() if callable(get_active) else None
-            if profile is not None:
-                active_profiles = [profile]
-            elif getattr(customer_repo, "has_active_autopost_customer", lambda: False)():
-                active_profiles = [SimpleNamespace(id=0, wire_product="finance", token_store={})]
-            else:
-                active_profiles = []
+        active_profiles = [_profile_snapshot(profile) for profile in _list_active_profiles(customer_repo)]
 
-        for profile in active_profiles:
-            product = normalize_wire_product(getattr(profile, "wire_product", "finance"))
-            store = dict(getattr(profile, "token_store", {}) or {})
-            enabled_source_families = _enabled_source_families(profile)
-            try:
-                drafting = DraftingService(api_key=store.get("openai_api_key"), model=settings.openai_model)
-            except TypeError:
-                drafting = DraftingService()
-            policy = policy_for_product(product)
-            try:
-                expired = job_repo.expire_stale_jobs(now, policy, customer_profile_id=profile.id)
-            except TypeError:
-                expired = job_repo.expire_stale_jobs(now, policy)
-            try:
-                recent_records = job_repo.recent_post_records(now - timedelta(days=1), profile.id)
-            except TypeError:
-                recent_records = job_repo.recent_post_records(now - timedelta(days=1))
-            recent_records = _planning_recent_records(recent_records, now, policy)
-            summary["skipped"] += expired
-
-            candidate_batches: list[tuple[str, list]] = []
-            try:
-                sources = get_wire_sources(product)
-            except TypeError:
-                sources = get_wire_sources()
-            if "base" in enabled_source_families:
-                for source in sources:
-                    source_name = getattr(source, "name", None) or f"{source.key}_feed"
-                    has_source_since = getattr(candidate_repo, "has_source_candidate_since", None)
-                    if callable(has_source_since):
-                        try:
-                            has_recent = has_source_since(profile.id, source_name, now - _BASE_FETCH_INTERVAL)
-                        except TypeError:
-                            has_recent = has_source_since(source_name, now - _BASE_FETCH_INTERVAL)
-                    else:
-                        has_recent = False
-                    if has_recent:
-                        continue
-                    candidate_batches.append((source.key, fetch_and_process(source, drafting)))
-                if product == "ai":
-                    candidate_batches.append(("ai_evergreen_backlog", generate_ai_evergreen_backlog_results(drafting)))
-
-            if settings.wire_web_breaking_enabled and "web" in enabled_source_families:
-                def _has_source_since(source_name, since):
-                    try:
-                        return candidate_repo.has_source_candidate_since(profile.id, source_name, since)
-                    except TypeError:
-                        return candidate_repo.has_source_candidate_since(source_name, since)
-
-                due_runs = get_due_web_runs(
-                    now,
-                    _has_source_since,
-                    product=product,
+    for profile_snapshot in active_profiles:
+        product = normalize_wire_product(getattr(profile_snapshot, "wire_product", "finance"))
+        db = SessionLocal()
+        try:
+            with db:
+                profile = _load_profile_for_cycle(db, profile_snapshot)
+                _run_profile_cycle(db, profile, now, settings, summary)
+        except Exception as exc:
+            rollback = getattr(db, "rollback", None)
+            if callable(rollback):
+                rollback()
+            logger.exception(
+                "wire profile cycle failed profile_id=%s product=%s",
+                getattr(profile_snapshot, "id", None),
+                product,
+            )
+            summary["failed"] += 1
+            cast_items = summary["items"]
+            if isinstance(cast_items, list):
+                cast_items.append(
+                    {
+                        "source": "profile",
+                        "customer_profile_id": getattr(profile_snapshot, "id", None),
+                        "product": product,
+                        "error": str(exc),
+                    }
                 )
-                for run in due_runs:
-                    candidate_batches.append(
-                        (
-                            run.key,
-                            fetch_web_breaking_candidates(
-                                run,
-                                openai_api_key=store.get("openai_api_key"),
-                                tavily_api_key=store.get("tavily_api_key"),
-                            ),
-                        )
-                    )
-
-            all_results = [result for _, results in candidate_batches for result in results]
-            _apply_customer_branding(all_results, profile)
-            decisions = plan_wire_queue(all_results, recent_posts=recent_records, now=now, settings=policy)
-            decisions_by_source: dict[str, list] = {source_key: [] for source_key, _ in candidate_batches}
-            for decision in decisions:
-                source_key = getattr(decision.result, "source_name", None) or (
-                    candidate_batches[0][0] if len(candidate_batches) == 1 else "unknown"
-                )
-                if source_key == "tradient_market_news":
-                    source_key = "tradient"
-                if source_key.startswith("tavily_"):
-                    source_key = source_key.removeprefix("tavily_")
-                decisions_by_source.setdefault(source_key, []).append(decision)
-
-            summary["sources_processed"] += len(candidate_batches)
-            summary["candidates"] += len(all_results)
-
-            for source_key, source_decisions in decisions_by_source.items():
-                source_items: list[dict] = []
-                for decision in source_decisions:
-                    try:
-                        candidate = candidate_repo.upsert_from_result(profile.id, decision.result)
-                    except TypeError:
-                        candidate = candidate_repo.upsert_from_result(decision.result)
-                    if decision.priority == "breaking" and decision.action in {"post_now", "queue", "defer"} and decision.scheduled_for is not None:
-                        try:
-                            job_repo.bump_non_breaking_queue(decision.scheduled_for, policy, customer_profile_id=profile.id)
-                        except TypeError:
-                            job_repo.bump_non_breaking_queue(decision.scheduled_for, policy)
-                    job_repo.record_decision(candidate, decision)
-                    if decision.action == "post_now":
-                        summary["post_now"] += 1
-                    elif decision.action in {"queue", "defer"}:
-                        summary["queued"] += 1
-                    else:
-                        summary["skipped"] += 1
-                    source_items.append(
-                        {
-                            "customer_profile_id": profile.id,
-                            "product": product,
-                            "action": decision.action,
-                            "priority": decision.priority,
-                            "scheduled_for": decision.scheduled_for.isoformat() if decision.scheduled_for else None,
-                            "reason": decision.reason,
-                            "title": decision.result.title,
-                            "draft_text": decision.result.draft_text,
-                            "score": decision.result.importance_score,
-                        }
-                    )
-                cast_items = summary["items"]
-                if isinstance(cast_items, list):
-                    cast_items.append({"source": source_key, "customer_profile_id": profile.id, "product": product, "decisions": source_items})
-
-            db.commit()
-            try:
-                publish_counts = _publish_due_jobs(db, profile, now)
-            except TypeError:
-                publish_counts = _publish_due_jobs(db, now)
-            summary["posted"] += publish_counts["posted"]
-            summary["failed"] += publish_counts["failed"]
 
     return summary
+
+
+def _list_active_profiles(customer_repo) -> list:
+    list_active = getattr(customer_repo, "list_active_autopost_customers", None)
+    if callable(list_active):
+        return list(list_active())
+    get_active = getattr(customer_repo, "get_active_autopost_customer", None)
+    profile = get_active() if callable(get_active) else None
+    if profile is not None:
+        return [profile]
+    if getattr(customer_repo, "has_active_autopost_customer", lambda: False)():
+        return [SimpleNamespace(id=0, wire_product="finance", token_store={})]
+    return []
+
+
+def _profile_snapshot(profile):
+    return SimpleNamespace(
+        id=getattr(profile, "id", 0),
+        display_name=getattr(profile, "display_name", None),
+        wire_product=getattr(profile, "wire_product", "finance"),
+        token_store=dict(getattr(profile, "token_store", {}) or {}),
+    )
+
+
+def _load_profile_for_cycle(db, profile_snapshot):
+    profile_id = getattr(profile_snapshot, "id", None)
+    if profile_id:
+        get = getattr(db, "get", None)
+        if callable(get):
+            try:
+                profile = get(CustomerProfile, profile_id)
+            except Exception:
+                profile = None
+            if profile is not None:
+                return profile
+    return profile_snapshot
+
+
+def _run_profile_cycle(db, profile, now: datetime, settings, summary: dict[str, list[dict] | int]) -> None:
+    candidate_repo = WireCandidateRepository(db)
+    job_repo = WireJobRepository(db)
+    product = normalize_wire_product(getattr(profile, "wire_product", "finance"))
+    store = dict(getattr(profile, "token_store", {}) or {})
+    enabled_source_families = _enabled_source_families(profile)
+    try:
+        drafting = DraftingService(api_key=store.get("openai_api_key"), model=settings.openai_model)
+    except TypeError:
+        drafting = DraftingService()
+    policy = policy_for_product(product)
+    try:
+        expired = job_repo.expire_stale_jobs(now, policy, customer_profile_id=profile.id)
+    except TypeError:
+        expired = job_repo.expire_stale_jobs(now, policy)
+    try:
+        recent_records = job_repo.recent_post_records(now - timedelta(days=1), profile.id)
+    except TypeError:
+        recent_records = job_repo.recent_post_records(now - timedelta(days=1))
+    recent_records = _planning_recent_records(recent_records, now, policy)
+    summary["skipped"] += expired
+
+    candidate_batches: list[tuple[str, list]] = []
+    try:
+        sources = get_wire_sources(product)
+    except TypeError:
+        sources = get_wire_sources()
+    if "base" in enabled_source_families:
+        for source in sources:
+            source_name = getattr(source, "name", None) or f"{source.key}_feed"
+            has_source_since = getattr(candidate_repo, "has_source_candidate_since", None)
+            if callable(has_source_since):
+                try:
+                    has_recent = has_source_since(profile.id, source_name, now - _BASE_FETCH_INTERVAL)
+                except TypeError:
+                    has_recent = has_source_since(source_name, now - _BASE_FETCH_INTERVAL)
+            else:
+                has_recent = False
+            if has_recent:
+                continue
+            candidate_batches.append((source.key, fetch_and_process(source, drafting)))
+        if product == "ai":
+            candidate_batches.append(("ai_evergreen_backlog", generate_ai_evergreen_backlog_results(drafting)))
+
+    if settings.wire_web_breaking_enabled and "web" in enabled_source_families:
+
+        def _has_source_since(source_name, since):
+            try:
+                return candidate_repo.has_source_candidate_since(profile.id, source_name, since)
+            except TypeError:
+                return candidate_repo.has_source_candidate_since(source_name, since)
+
+        due_runs = get_due_web_runs(
+            now,
+            _has_source_since,
+            product=product,
+        )
+        for run in due_runs:
+            candidate_batches.append(
+                (
+                    run.key,
+                    fetch_web_breaking_candidates(
+                        run,
+                        openai_api_key=store.get("openai_api_key"),
+                        tavily_api_key=store.get("tavily_api_key"),
+                    ),
+                )
+            )
+
+    all_results = [result for _, results in candidate_batches for result in results]
+    _apply_customer_branding(all_results, profile)
+    decisions = plan_wire_queue(all_results, recent_posts=recent_records, now=now, settings=policy)
+    decisions_by_source: dict[str, list] = {source_key: [] for source_key, _ in candidate_batches}
+    for decision in decisions:
+        source_key = getattr(decision.result, "source_name", None) or (
+            candidate_batches[0][0] if len(candidate_batches) == 1 else "unknown"
+        )
+        if source_key == "tradient_market_news":
+            source_key = "tradient"
+        if source_key.startswith("tavily_"):
+            source_key = source_key.removeprefix("tavily_")
+        decisions_by_source.setdefault(source_key, []).append(decision)
+
+    summary["sources_processed"] += len(candidate_batches)
+    summary["candidates"] += len(all_results)
+
+    for source_key, source_decisions in decisions_by_source.items():
+        source_items: list[dict] = []
+        for decision in source_decisions:
+            try:
+                candidate = candidate_repo.upsert_from_result(profile.id, decision.result)
+            except TypeError:
+                candidate = candidate_repo.upsert_from_result(decision.result)
+            if decision.priority == "breaking" and decision.action in {"post_now", "queue", "defer"} and decision.scheduled_for is not None:
+                try:
+                    job_repo.bump_non_breaking_queue(decision.scheduled_for, policy, customer_profile_id=profile.id)
+                except TypeError:
+                    job_repo.bump_non_breaking_queue(decision.scheduled_for, policy)
+            job_repo.record_decision(candidate, decision)
+            if decision.action == "post_now":
+                summary["post_now"] += 1
+            elif decision.action in {"queue", "defer"}:
+                summary["queued"] += 1
+            else:
+                summary["skipped"] += 1
+            source_items.append(
+                {
+                    "customer_profile_id": profile.id,
+                    "product": product,
+                    "action": decision.action,
+                    "priority": decision.priority,
+                    "scheduled_for": decision.scheduled_for.isoformat() if decision.scheduled_for else None,
+                    "reason": decision.reason,
+                    "title": decision.result.title,
+                    "draft_text": decision.result.draft_text,
+                    "score": decision.result.importance_score,
+                }
+            )
+        cast_items = summary["items"]
+        if isinstance(cast_items, list):
+            cast_items.append({"source": source_key, "customer_profile_id": profile.id, "product": product, "decisions": source_items})
+
+    db.commit()
+    try:
+        publish_counts = _publish_due_jobs(db, profile, now)
+    except TypeError:
+        publish_counts = _publish_due_jobs(db, now)
+    summary["posted"] += publish_counts["posted"]
+    summary["failed"] += publish_counts["failed"]
 
 
 def _planning_recent_records(records, now: datetime, settings) -> list:
